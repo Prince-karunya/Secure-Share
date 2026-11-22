@@ -1,0 +1,23 @@
+{% extends "shares/base.html" %}
+{% block title %}Register - SecureShare{% endblock %}
+{% block content %}
+<div class="row justify-content-center auth-shell"><div class="col-md-5"><div class="card auth-card">
+  <div class="document-icon mb-3">&#10022;</div>
+  <h1 class="h3 mb-2">Create your account</h1>
+  <p class="text-muted mb-4">Start encrypting and sharing documents securely.</p>
+  <form method="post" action="{% url 'account_signup' %}">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="text-danger small mb-3">{{ form.non_field_errors }}</div>{% endif %}
+    {% for field in form %}
+      <p>
+        {{ field.label_tag }}
+        {{ field }}
+        {% if field.errors %}<span class="text-danger small d-block mt-1">{{ field.errors|striptags }}</span>{% endif %}
+        {% if field.help_text %}<span class="form-text d-block">{{ field.help_text|safe }}</span>{% endif %}
+      </p>
+    {% endfor %}
+    <button class="btn btn-primary w-100" type="submit">Register</button>
+  </form>
+  <p class="text-center mt-3 mb-0">Already registered? <a href="{% url 'account_login' %}">Login</a></p>
+</div></div></div></div>
+{% endblock %}

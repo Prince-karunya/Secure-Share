@@ -1,0 +1,10 @@
+django
+cryptography
+qrcode[pil]
+pypdfium2
+django-allauth
+pytesseract
+dj-database-url
+psycopg[binary]
+boto3
+whitenoise

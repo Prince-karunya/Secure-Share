@@ -1,0 +1,60 @@
+{% extends "shares/base.html" %}
+{% load static %}
+{% block title %}Download - SecureShare{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <div class="card ss-card">
+      <div class="card-body p-4 p-md-5">
+        <h1 class="h3 mb-4">&#128193; Shared file</h1>
+        <dl class="row">
+          <dt class="col-4">File</dt><dd class="col-8">{{ shared_file.original_name }}</dd>
+          <dt class="col-4">Size</dt><dd class="col-8">{{ shared_file.file_size }} bytes</dd>
+          <dt class="col-4">Expires</dt><dd class="col-8">{% if shared_file.expires_at %}{{ shared_file.expires_at }}{% else %}No expiry{% endif %}</dd>
+          {% if shared_file.download_allowed %}
+            <dt class="col-4">{% if client_encrypted_download %}Download grants left{% else %}Downloads left{% endif %}</dt><dd class="col-8">{{ shared_file.downloads_left }}</dd>
+          {% else %}
+            <dt class="col-4">Downloads</dt><dd class="col-8">Disabled by uploader</dd>
+          {% endif %}
+        </dl>
+        <form method="post" id="share-access-form"
+              data-client-encrypted="{{ client_encrypted_download|yesno:'true,false' }}"
+              data-access-url="{% url 'object_access' shared_file.token %}">
+          {% csrf_token %}
+          {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|striptags }}</div>{% endif %}
+          {% if shared_file.password_protected %}
+            <div class="mb-3">
+              {{ form.password.label_tag }}
+              {{ form.password }}
+              {% if form.password.errors %}<div class="text-danger small">{{ form.password.errors|striptags }}</div>{% endif %}
+            </div>
+          {% endif %}
+          <div class="d-grid gap-2">
+            {% if can_preview %}
+              <button class="btn btn-outline-primary" type="submit" name="action" value="view">View in browser</button>
+            {% endif %}
+            {% if shared_file.download_allowed %}
+              <button class="btn btn-primary" type="submit" name="action" value="download">Download file</button>
+            {% endif %}
+          </div>
+          {% if not can_preview and not shared_file.download_allowed %}
+            <div class="alert alert-warning mt-3 mb-0">This file cannot be previewed, and the uploader has disabled downloads.</div>
+          {% elif not shared_file.download_allowed %}
+            <p class="form-text mt-3 mb-0">The uploader allows browser preview but has disabled downloads. PDFs are rendered as page images, so they do not show a browser download control. Preview protection cannot stop OS screenshots or external cameras.</p>
+          {% endif %}
+          {% if client_encrypted_download %}
+            <div id="access-status" class="small mt-3" role="status" aria-live="polite"></div>
+            <div id="secure-preview-result" class="mt-3"></div>
+            <script src="{% static 'shares/vercel-download.js' %}" defer></script>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+document.querySelectorAll('input').forEach(function (el) {
+  if (el.type !== 'hidden') el.classList.add('form-control');
+});
+</script>
+{% endblock %}

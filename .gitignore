@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+db.sqlite3
+devices.db
+encrypted_files/
+staticfiles/
+.local-server.pid
+.vercel/
+.env
+.env.*
+!.env.example

@@ -1,0 +1,52 @@
+{% extends "shares/base.html" %}
+{% block title %}My documents - SecureShare{% endblock %}
+{% block content %}
+<div class="d-flex align-items-end justify-content-between mb-4">
+  <div>
+    <p class="text-uppercase text-muted fw-bold small mb-2">Workspace</p>
+    <h1 class="h2 page-heading mb-0">My document history</h1>
+  </div>
+  <a class="btn btn-primary" href="{% url 'upload' %}">+ Share document</a>
+</div>
+<div class="card ss-card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr><th>Document</th><th>Created</th><th>Expiry</th><th>{% if client_encrypted_download %}Download grants{% else %}Downloads{% endif %}</th><th>Masking</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for share in shares %}
+          <tr>
+            <td>{{ share.original_name }}</td>
+            <td>{{ share.created_at }}</td>
+            <td>{% if share.expires_at %}{{ share.expires_at }}{% else %}No expiry{% endif %}</td>
+            <td>{% if share.download_allowed %}{{ share.download_count }} / {{ share.max_downloads }}{% else %}Disabled{% endif %}</td>
+            <td>{% if share.mask_sensitive %}<span class="badge text-bg-info">Enabled</span>{% else %}Off{% endif %}</td>
+            <td>{% if share.is_deleted %}<span class="badge text-bg-secondary">Deleted</span>{% elif share.is_available %}<span class="badge text-bg-success">Available</span>{% else %}<span class="badge text-bg-warning">Expired</span>{% endif %}</td>
+            <td class="text-end">
+              {% if share.is_available %}
+                <a class="btn btn-sm btn-outline-primary" data-share-token="{{ share.token }}"
+                   href="{% if client_encrypted_download %}{% url 'download' share.token %}{% else %}{% url 'created' share.token %}{% endif %}">Open link</a>
+              {% endif %}
+              {% if not share.is_deleted %}
+                <form method="post" action="{% url 'delete_now' share.token %}" class="d-inline" onsubmit="return confirm('Delete this document now?');">
+                  {% csrf_token %}
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7" class="text-center text-muted py-5">No documents have been uploaded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% if client_encrypted_download %}
+<script>
+document.querySelectorAll('a[data-share-token]').forEach(function (link) {
+  const key = localStorage.getItem('secureshare-key-' + link.dataset.shareToken);
+  if (key) link.href += '#key=' + encodeURIComponent(key);
+});
+</script>
+{% endif %}
+{% endblock %}

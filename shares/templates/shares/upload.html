@@ -1,0 +1,115 @@
+{% extends "shares/base.html" %}
+{% load static %}
+{% block title %}Upload - SecureShare{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-xl-8 col-lg-9">
+    <div class="card ss-card">
+      <div class="card-body p-4 p-md-5">
+        <div class="text-center mb-4">
+          <span class="badge text-bg-primary rounded-pill px-3 py-2">1 / Upload &amp; encrypt</span>
+        </div>
+        <h1 class="h2 page-heading text-center mb-2">Create a secure share</h1>
+        <p class="text-center text-muted mb-4">Encrypt, control, and share your document.</p>
+        <form method="post" enctype="multipart/form-data" id="share-upload-form"
+              data-client-encrypted="{{ client_encrypted_upload|yesno:'true,false' }}"
+              data-init-url="{% url 'upload_init' %}">
+          {% csrf_token %}
+          {% if form.non_field_errors %}
+            <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+          {% endif %}
+          <div class="mb-3">
+            <label class="form-label fw-semibold" for="{{ form.file.id_for_label }}">&#128193; Choose document</label>
+            {{ form.file }}
+            {% if form.file.errors %}<div class="text-danger small">{{ form.file.errors|striptags }}</div>{% endif %}
+          </div>
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.expiry_enabled }}
+              <label class="form-check-label fw-semibold" for="{{ form.expiry_enabled.id_for_label }}">&#9201; Set an expiry time</label>
+            </div>
+            <div id="expiry-options" class="mt-2">
+              <label class="form-label" for="{{ form.expiry.id_for_label }}">Expires after</label>
+              {{ form.expiry }}
+              {% if form.expiry.errors %}<div class="text-danger small">{{ form.expiry.errors|striptags }}</div>{% endif %}
+            </div>
+          </div>
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.download_allowed }}
+              <label class="form-check-label fw-semibold" for="{{ form.download_allowed.id_for_label }}">Allow recipients to download the file?</label>
+            </div>
+            {% if form.download_allowed.errors %}<div class="text-danger small">{{ form.download_allowed.errors|striptags }}</div>{% endif %}
+            <div class="form-text">When disabled, recipients can preview supported file types in their browser. Browser previews cannot prevent screenshots or saving through browser tools.</div>
+          </div>
+          <div id="download-limit-options" class="mb-3" hidden>
+            <label class="form-label fw-semibold" for="{{ form.max_downloads.id_for_label }}">Maximum downloads</label>
+            {{ form.max_downloads }}
+            {% if form.max_downloads.errors %}<div class="text-danger small">{{ form.max_downloads.errors|striptags }}</div>{% endif %}
+          </div>
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.mask_sensitive }}
+              <label class="form-check-label fw-semibold" for="{{ form.mask_sensitive.id_for_label }}">Mask sensitive information in previews</label>
+            </div>
+            <div class="form-text">Masks detected phone numbers, emails, Aadhaar/card numbers, PANs, and account numbers. OCR should be treated as assisted masking, not a guarantee.</div>
+          </div>
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.password_enabled }}
+              <label class="form-check-label fw-semibold" for="{{ form.password_enabled.id_for_label }}">&#128274; Require a password</label>
+            </div>
+            <div id="password-options" class="mt-2">
+              <label class="form-label" for="{{ form.password.id_for_label }}">Password (at least 6 characters)</label>
+              {{ form.password }}
+              {% if form.password.errors %}<div class="text-danger small">{{ form.password.errors|striptags }}</div>{% endif %}
+            </div>
+          </div>
+          <button class="btn btn-primary w-100" type="submit">Encrypt &amp; create link</button>
+          {% if client_encrypted_upload %}
+            <div class="progress mt-3" role="progressbar" aria-label="Upload progress" hidden>
+              <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%">0%</div>
+            </div>
+            <div id="upload-status" class="small mt-2" role="status" aria-live="polite"></div>
+          {% endif %}
+        </form>
+        <p class="text-muted small mt-3 mb-0">Maximum 100 MB. Dangerous executable and script types are blocked.</p>
+        {% if client_encrypted_upload %}
+          <p class="text-muted small mt-2 mb-0">Your browser encrypts the file before it is sent directly to private storage. Use a modern browser and keep this tab open until the upload finishes.</p>
+          <script src="{% static 'shares/vercel-upload.js' %}" defer></script>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+document.querySelectorAll('input[type="file"], input[type="password"]').forEach(function (el) {
+  el.classList.add('form-control');
+});
+document.querySelectorAll('select').forEach(function (el) { el.classList.add('form-select'); });
+document.querySelectorAll('.form-check-input').forEach(function (el) { el.classList.add('form-check-input'); });
+function syncOption(checkbox, target, requiredInput) {
+  target.hidden = !checkbox.checked;
+  requiredInput.disabled = !checkbox.checked;
+  requiredInput.required = checkbox.checked;
+}
+const expiryToggle = document.getElementById('{{ form.expiry_enabled.id_for_label }}');
+const expirySelect = document.getElementById('{{ form.expiry.id_for_label }}');
+const passwordToggle = document.getElementById('{{ form.password_enabled.id_for_label }}');
+const passwordInput = document.getElementById('{{ form.password.id_for_label }}');
+const downloadToggle = document.getElementById('{{ form.download_allowed.id_for_label }}');
+const downloadLimit = document.getElementById('{{ form.max_downloads.id_for_label }}');
+expiryToggle.addEventListener('change', function () {
+  syncOption(expiryToggle, document.getElementById('expiry-options'), expirySelect);
+});
+passwordToggle.addEventListener('change', function () {
+  syncOption(passwordToggle, document.getElementById('password-options'), passwordInput);
+});
+downloadToggle.addEventListener('change', function () {
+  syncOption(downloadToggle, document.getElementById('download-limit-options'), downloadLimit);
+});
+syncOption(expiryToggle, document.getElementById('expiry-options'), expirySelect);
+syncOption(passwordToggle, document.getElementById('password-options'), passwordInput);
+syncOption(downloadToggle, document.getElementById('download-limit-options'), downloadLimit);
+</script>
+{% endblock %}

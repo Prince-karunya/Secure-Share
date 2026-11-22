@@ -1,0 +1,82 @@
+{% extends "shares/base.html" %}
+{% block title %}Link created - SecureShare{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card ss-card">
+      <div class="card-body p-4 p-md-5 text-center">
+        <span class="badge text-bg-success rounded-pill px-3 py-2">2 / Share securely</span>
+        <h1 class="h3 mt-3">Your private link is ready</h1>
+        <div class="input-group my-4 share-url">
+          <input id="shareLink" class="form-control" value="{{ share_url }}" data-share-token="{{ shared_file.token }}" readonly>
+          <button class="btn btn-outline-primary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('shareLink').value)">Copy</button>
+        </div>
+        {% if qr_uses_localhost %}
+          <div class="alert alert-info text-start">
+            This local link works on this computer, even without Wi-Fi. A phone cannot open a computer's localhost link; phone access requires both devices on the same Wi-Fi and the app started in LAN mode.
+          </div>
+        {% endif %}
+        <a class="qr-frame" id="shareQrLink" href="{{ share_url }}" aria-label="Open the share link">
+          <img id="shareQrImage" class="img-fluid border rounded mb-3" style="max-width: 220px" src="data:image/png;base64,{{ qr_base64 }}" alt="QR code linking to {{ share_url }}">
+        </a>
+        {% if client_encrypted_share %}
+          <div id="shareQr" class="d-flex justify-content-center mb-3"></div>
+        {% endif %}
+        <dl class="row text-start mx-auto" style="max-width: 430px">
+          <dt class="col-5">File</dt><dd class="col-7">{{ shared_file.original_name }}</dd>
+          <dt class="col-5">Expires</dt><dd class="col-7">{% if shared_file.expires_at %}{{ shared_file.expires_at }}{% else %}No expiry{% endif %}</dd>
+          {% if shared_file.download_allowed %}
+            <dt class="col-5">{% if client_encrypted_share %}Download access limit{% else %}Download limit{% endif %}</dt><dd class="col-7">{{ shared_file.max_downloads }}</dd>
+          {% else %}
+            <dt class="col-5">Downloads</dt><dd class="col-7">Disabled</dd>
+          {% endif %}
+        </dl>
+        {% if shared_file.password_protected %}
+          <div class="alert alert-warning">Share the password separately. Anyone with the link still needs the password.</div>
+        {% elif shared_file.download_allowed %}
+          <div class="alert alert-secondary">This link does not require a password. Anyone with the link can download the file.</div>
+        {% else %}
+          <div class="alert alert-secondary">This link does not require a password. Downloads are disabled, but supported files can be previewed in the browser.</div>
+        {% endif %}
+        {% if client_encrypted_share and not shared_file.password_protected %}
+          <div class="alert alert-warning">The decryption key is carried in this link's private URL fragment. Share the complete link only with the intended recipient.</div>
+        {% endif %}
+        {% if can_delete %}
+          <form method="post" action="{% url 'delete_now' shared_file.token %}" onsubmit="return confirm('Delete this file now?');">
+            {% csrf_token %}
+            <button class="btn btn-outline-danger" type="submit">Delete now</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% if client_encrypted_share %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const shareInput = document.getElementById('shareLink');
+const shareToken = shareInput.dataset.shareToken;
+const storedKeyName = 'secureshare-key-' + shareToken;
+const key = new URLSearchParams(window.location.hash.slice(1)).get('key')
+  || localStorage.getItem(storedKeyName);
+if (key) {
+  localStorage.setItem(storedKeyName, key);
+  const keyedUrl = shareInput.value + '#key=' + encodeURIComponent(key);
+  shareInput.value = keyedUrl;
+  if (!window.location.hash) history.replaceState(null, '', window.location.pathname + '#key=' + encodeURIComponent(key));
+  document.getElementById('shareQrLink').href = keyedUrl;
+  document.getElementById('shareQrLink').setAttribute('aria-label', 'Open the share link');
+  document.getElementById('shareQrImage').hidden = true;
+  if (window.QRCode) {
+    new QRCode(document.getElementById('shareQr'), {
+      text: keyedUrl, width: 220, height: 220,
+      colorDark: '#111827', colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  } else {
+    document.getElementById('shareQr').textContent = 'QR code needs a network connection to load.';
+  }
+}
+</script>
+{% endif %}
+{% endblock %}
