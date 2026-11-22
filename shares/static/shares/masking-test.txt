@@ -1,0 +1,16 @@
+SecureShare masking test
+========================
+
+This file contains synthetic examples only. They are not real personal data.
+Upload it to SecureShare, enable "Mask sensitive information in previews",
+then choose "View in browser" to check the masked text preview.
+
+Email: masking-test@example.com
+Phone: +91 98765 43210
+Phone (hyphenated): 987-654-3210
+Aadhaar-style test number: 1234 5678 9012
+PAN-style test identifier: ABCDE1234F
+Card-style test number: 4111 1111 1111 1111
+Bank-style test number: 1234567890123456
+
+This ordinary sentence should remain readable.

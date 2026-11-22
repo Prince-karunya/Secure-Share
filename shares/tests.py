@@ -293,8 +293,8 @@ class ShareOptionsTests(TestCase):
         self.assertNotIn('1234 1234 1234', masked)
         self.assertNotIn('ABCDE1234F', masked)
 
-    def test_vercel_explains_when_masked_pdf_preview_is_unavailable(self):
-        """Do not offer an unmasked Vercel PDF preview when masking was requested."""
+    def test_vercel_allows_masked_pdf_preview_for_browser_ocr(self):
+        """Allow masked PDF previews so browser OCR can redact them before display."""
         shared_file = self.upload(
             file=SimpleUploadedFile('invoice.pdf', b'%PDF-1.4\n%%EOF'),
             mask_sensitive='on',
@@ -314,9 +314,40 @@ class ShareOptionsTests(TestCase):
                 response = self.client.get(f'/f/{shared_file.token}/')
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'masked image and PDF previews are unavailable')
-        self.assertNotContains(response, 'View in browser')
+        self.assertContains(response, 'View in browser')
         self.assertContains(response, 'Download file')
+        self.assertContains(response, 'vercel-download.js')
+
+    def test_vercel_authorizes_masked_pdf_for_browser_ocr(self):
+        """Return encrypted PDF access so the browser can OCR and mask its preview."""
+        shared_file = self.upload(
+            file=SimpleUploadedFile('invoice.pdf', b'%PDF-1.4\n%%EOF'),
+            mask_sensitive='on',
+            download_allowed='on',
+        )
+        environment = {
+            'DJANGO_SECRET_KEY': 'test-secret',
+            'DATABASE_URL': 'postgresql://test:test@localhost/test',
+            'S3_BUCKET_NAME': 'test-bucket',
+            'S3_REGION': 'test-region',
+            'S3_ENDPOINT_URL': 'https://storage.example.test',
+            'S3_ACCESS_KEY_ID': 'test-access-key',
+            'S3_SECRET_ACCESS_KEY': 'test-secret-key',
+        }
+        with patch.dict(os.environ, environment):
+            with override_settings(VERCEL=True, USE_OBJECT_STORAGE=True):
+                with patch(
+                    'shares.views.object_storage.create_download_url',
+                    return_value='https://storage.example.test/signed-file',
+                ):
+                    response = self.client.post(
+                        f'/api/shares/{shared_file.token}/access/',
+                        {'action': 'view', 'password': ''},
+                    )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['mask_sensitive'])
+        self.assertEqual(response.json()['content_type'], 'application/pdf')
 
     def test_ocr_masking_fails_closed_without_tesseract(self):
         """Do not return an image unchanged if OCR masking cannot run."""

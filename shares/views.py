@@ -365,13 +365,7 @@ def download(request, token):
 
     action = request.POST.get('action') if request.method == 'POST' else None
     content_type = preview_content_type(shared_file.original_name)
-    masking_unavailable = (
-        settings.USE_OBJECT_STORAGE
-        and shared_file.mask_sensitive
-        and content_type is not None
-        and not content_type.startswith('text/')
-    )
-    can_preview = content_type is not None and not masking_unavailable
+    can_preview = content_type is not None
     if request.method == 'POST' and action == 'download' and not shared_file.download_allowed:
         log_access(shared_file, request, False, 'download denied by uploader')
         messages.error(request, "The uploader has disabled downloads for this share.")
@@ -562,7 +556,6 @@ window.addEventListener('focus', resumePreview);
         'form': form,
         'can_preview': can_preview,
         'client_encrypted_download': settings.USE_OBJECT_STORAGE,
-        'masking_unavailable': masking_unavailable,
     })
 
 
@@ -700,11 +693,6 @@ def object_access(request, token):
         content_type = preview_content_type(shared_file.original_name)
         if content_type is None:
             return JsonResponse({'error': 'This file type cannot be previewed.'}, status=415)
-        if shared_file.mask_sensitive and not content_type.startswith('text/'):
-            return JsonResponse({
-                'error': 'Sensitive masking is only available for text previews on this deployment.',
-            }, status=422)
-
     password = request.POST.get('password', '')
     if shared_file.password_protected and not check_password(password, shared_file.password_hash):
         SharedFile.objects.filter(pk=shared_file.pk).update(failed_attempts=F('failed_attempts') + 1)

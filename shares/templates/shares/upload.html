@@ -55,10 +55,13 @@
             <div class="form-text">
               Masks detected phone numbers, emails, Aadhaar/card numbers, PANs, and account numbers.
               {% if client_encrypted_upload %}
-                On Vercel, masking is supported only for text-file previews; masked image and PDF previews are unavailable.
+                Text patterns are checked directly. Images and PDFs use OCR in your browser; their contents are not sent to an OCR service. An internet connection is needed to load OCR tools, and OCR may miss text. Masking changes previews only, not downloads.
               {% else %}
-                Image and PDF masking requires Tesseract OCR and should be treated as assisted masking, not a guarantee.
+                Image and PDF masking requires Tesseract OCR. Masking changes previews only, not downloads, and should be treated as assisted masking, not a guarantee.
               {% endif %}
+            </div>
+            <div class="form-text">
+              <a href="{% static 'shares/masking-test.txt' %}" download>Download the synthetic masking test file</a>
             </div>
           </div>
           <div class="mb-3">

@@ -24,11 +24,15 @@ Users can register or log in with either their email address or username and
 password. Uploaded documents are owned by the signed-in account and appear in
 `/dashboard/`.
 
-Image and PDF masking uses Tesseract OCR for detected text blocks. Install
-Tesseract separately and make sure `tesseract` is on `PATH`. Text-file masking
-uses patterns without OCR. Masking is an assisted redaction feature and should
-not be relied on as a legal-compliance guarantee; review important documents
-manually.
+For local image and PDF previews, install Tesseract OCR separately and make
+sure `tesseract` is on `PATH`. On Vercel, the recipient's browser uses
+Tesseract.js to find and cover sensitive OCR text in image/PDF previews;
+text-file previews use pattern matching. Vercel loads the pinned OCR library
+and English language model from jsDelivr on demand, so masking those files
+requires an internet connection. File contents are processed in the browser,
+not sent to an OCR service. Masking changes previews only, not the original
+download. OCR and pattern detection can miss sensitive content; carefully
+review the preview and do not treat masking as a legal-compliance guarantee.
 
 Protected preview mode also disables common browser actions and hides content
 while the tab is inactive. It cannot prevent OS-level screenshots, screen
@@ -201,9 +205,13 @@ For subsequent schema changes, run migrations against the same production
   generated link private.
 - Vercel must be accessed over HTTPS for browser cryptography. Vercel's
   deployment URL and private bucket CORS must both be configured correctly.
-- Image/PDF OCR masking is unavailable on Vercel. If masking is enabled, those
-  previews are refused rather than shown unmasked; text previews still support
-  pattern-based masking. Local mode retains the existing OCR behavior.
+- Vercel performs OCR masking for image and PDF previews in the recipient's
+  browser using Tesseract.js; document contents stay in the browser and are not
+  uploaded to an OCR service. The browser downloads the OCR library and English
+  language data from jsDelivr when needed, so an internet connection is
+  required. OCR and pattern detection can miss sensitive content; review the
+  preview carefully. Text previews use local pattern matching. Local mode uses
+  Tesseract OCR installed on the server.
 - Vercel download limits count successful access grants. The private bucket
   URL is short-lived (two minutes) but can be reused during that window, so
   this serverless direct-transfer design does not provide strict one-use

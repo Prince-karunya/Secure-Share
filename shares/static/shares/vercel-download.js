@@ -5,6 +5,7 @@
   const status = document.getElementById('access-status');
   const result = document.getElementById('secure-preview-result');
   const csrf = form.querySelector('input[name="csrfmiddlewaretoken"]').value;
+  let ocrWorkerPromise;
 
   function decodeBase64(value) {
     return Uint8Array.from(atob(value), character => character.charCodeAt(0));
@@ -41,7 +42,53 @@
       value.replace(pattern, match => '•'.repeat(match.length)), text);
   }
 
-  async function showPdf(buffer) {
+  async function getOcrWorker() {
+    if (!window.Tesseract) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('The in-browser OCR library could not be loaded.'));
+        document.head.appendChild(script);
+      });
+    }
+    if (!ocrWorkerPromise) {
+      ocrWorkerPromise = window.Tesseract.createWorker('eng', 1, {
+        logger: message => {
+          if (message.status === 'recognizing text' && message.progress) {
+            status.textContent = `Scanning for sensitive text… ${Math.round(message.progress * 100)}%`;
+          }
+        }
+      });
+    }
+    return ocrWorkerPromise;
+  }
+
+  async function redactCanvas(canvas) {
+    status.textContent = 'Scanning this file in your browser for sensitive text…';
+    const worker = await getOcrWorker();
+    const { data } = await worker.recognize(canvas);
+    const context = canvas.getContext('2d');
+    let redactedLines = 0;
+    for (const line of data.lines || []) {
+      const hasPatternMatch = maskText(line.text) !== line.text;
+      const hasLabeledValue = /\b(?:aadhaar|aadhar|pan|gstin|ifsc|account|phone|mobile|email|address)\b/i.test(line.text)
+        && /[:#-]\s*\S/.test(line.text);
+      if (!hasPatternMatch && !hasLabeledValue) continue;
+
+      const padding = Math.max(3, Math.round((line.bbox.y1 - line.bbox.y0) * 0.15));
+      const left = Math.max(0, line.bbox.x0 - padding);
+      const top = Math.max(0, line.bbox.y0 - padding);
+      const right = Math.min(canvas.width, line.bbox.x1 + padding);
+      const bottom = Math.min(canvas.height, line.bbox.y1 + padding);
+      context.fillStyle = '#111827';
+      context.fillRect(left, top, right - left, bottom - top);
+      redactedLines += 1;
+    }
+    return redactedLines;
+  }
+
+  async function showPdf(buffer, maskSensitive) {
     if (!window.pdfjsLib) {
       await new Promise((resolve, reject) => {
         const script = document.createElement('script');
@@ -55,16 +102,23 @@
     pdfjs.GlobalWorkerOptions.workerSrc =
       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     const pdf = await pdfjs.getDocument({ data: buffer }).promise;
+    let redactedLines = 0;
     for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 50); pageNumber++) {
       const page = await pdf.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: 1.3 });
+      const initialViewport = page.getViewport({ scale: 1.3 });
+      const scale = Math.min(1, 2400 / Math.max(initialViewport.width, initialViewport.height));
+      const viewport = page.getViewport({ scale: 1.3 * scale });
       const canvas = document.createElement('canvas');
       canvas.className = 'img-fluid d-block mb-3 mx-auto';
+      canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', `PDF page ${pageNumber} preview`);
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-      result.appendChild(canvas);
       await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      if (maskSensitive) redactedLines += await redactCanvas(canvas);
+      result.appendChild(canvas);
     }
+    return redactedLines;
   }
 
   async function present(info, plaintext) {
@@ -82,23 +136,45 @@
 
     result.replaceChildren();
     result.className = 'mt-3 p-3 border rounded bg-white';
+    let redactedLines = 0;
     if (info.content_type.startsWith('text/')) {
       const pre = document.createElement('pre');
       pre.className = 'secure-preview text-break';
       let text = new TextDecoder().decode(plaintext);
-      if (info.mask_sensitive) text = maskText(text);
+      if (info.mask_sensitive) {
+        const maskedText = maskText(text);
+        redactedLines = (maskedText.match(/•+/g) || []).length;
+        text = maskedText;
+      }
       pre.textContent = text;
       result.appendChild(pre);
     } else if (info.content_type === 'application/pdf') {
-      await showPdf(plaintext);
+      redactedLines = await showPdf(plaintext, info.mask_sensitive);
     } else {
-      const image = document.createElement('img');
-      image.className = 'img-fluid';
-      image.alt = info.file_name;
-      image.src = URL.createObjectURL(blob);
-      result.appendChild(image);
+      if (info.mask_sensitive) {
+        const bitmap = await createImageBitmap(blob);
+        const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement('canvas');
+        canvas.className = 'img-fluid';
+        canvas.setAttribute('role', 'img');
+        canvas.setAttribute('aria-label', `Masked preview of ${info.file_name}`);
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        bitmap.close();
+        redactedLines = await redactCanvas(canvas);
+        result.appendChild(canvas);
+      } else {
+        const image = document.createElement('img');
+        image.className = 'img-fluid';
+        image.alt = info.file_name;
+        image.src = URL.createObjectURL(blob);
+        result.appendChild(image);
+      }
     }
-    status.textContent = 'Protected preview is ready.';
+    status.textContent = info.mask_sensitive
+      ? `Preview ready. Masked ${redactedLines} detected region(s). Automated masking can miss sensitive text; review carefully.`
+      : 'Protected preview is ready.';
   }
 
   form.addEventListener('submit', async event => {
