@@ -184,26 +184,75 @@
     return redactedLines;
   }
 
-  async function loadJsPdf() {
-    if (!window.jspdf) {
-      await new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js';
-        script.onload = resolve;
-        script.onerror = () => reject(new Error('The PDF download library could not be loaded.'));
-        document.head.appendChild(script);
-      });
+  function createImagePdf(pages) {
+    const encoder = new TextEncoder();
+    const chunks = [];
+    const offsets = [0];
+    let length = 0;
+    const append = chunk => {
+      chunks.push(chunk);
+      length += chunk.byteLength;
+    };
+    const appendText = text => append(encoder.encode(text));
+    const addObject = (number, parts) => {
+      offsets[number] = length;
+      appendText(`${number} 0 obj\n`);
+      parts.forEach(part => typeof part === 'string' ? appendText(part) : append(part));
+      appendText('\nendobj\n');
+    };
+    const objectCount = 2 + pages.length * 3;
+
+    appendText('%PDF-1.4\n');
+    addObject(1, ['<< /Type /Catalog /Pages 2 0 R >>']);
+    const pageReferences = pages.map((page, index) => `${3 + index * 3} 0 R`);
+    addObject(2, [
+      `<< /Type /Pages /Kids [${pageReferences.join(' ')}] /Count ${pages.length} >>`
+    ]);
+
+    pages.forEach((page, index) => {
+      const pageObject = 3 + index * 3;
+      const contentObject = pageObject + 1;
+      const imageObject = pageObject + 2;
+      const content = encoder.encode(
+        `q ${page.width} 0 0 ${page.height} 0 0 cm /Im0 Do Q`
+      );
+      addObject(pageObject, [
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${page.width} ${page.height}]`,
+        ` /Resources << /XObject << /Im0 ${imageObject} 0 R >> >>`,
+        ` /Contents ${contentObject} 0 R >>`
+      ]);
+      addObject(contentObject, [
+        `<< /Length ${content.byteLength} >>\nstream\n`,
+        content,
+        '\nendstream'
+      ]);
+      addObject(imageObject, [
+        `<< /Type /XObject /Subtype /Image /Width ${page.pixelWidth}`,
+        ` /Height ${page.pixelHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8`,
+        ` /Filter /DCTDecode /Length ${page.jpeg.byteLength} >>\nstream\n`,
+        page.jpeg,
+        '\nendstream'
+      ]);
+    });
+
+    const crossReferenceOffset = length;
+    appendText(`xref\n0 ${objectCount + 1}\n0000000000 65535 f \n`);
+    for (let objectNumber = 1; objectNumber <= objectCount; objectNumber++) {
+      appendText(`${String(offsets[objectNumber]).padStart(10, '0')} 00000 n \n`);
     }
-    return window.jspdf.jsPDF;
+    appendText(
+      `trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\n` +
+      `startxref\n${crossReferenceOffset}\n%%EOF\n`
+    );
+    return new Blob(chunks, { type: 'application/pdf' });
   }
 
   async function createMaskedPdf(buffer) {
     const pdfjs = await loadPdfJs();
     pdfjs.GlobalWorkerOptions.workerSrc =
       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    const JsPdf = await loadJsPdf();
     const sourcePdf = await pdfjs.getDocument({ data: buffer }).promise;
-    let outputPdf;
+    const pages = [];
     let redactedLines = 0;
 
     for (let pageNumber = 1; pageNumber <= sourcePdf.numPages; pageNumber++) {
@@ -214,35 +263,32 @@
       const canvas = document.createElement('canvas');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-      redactedLines += await redactCanvas(canvas);
-
-      const orientation = baseViewport.width > baseViewport.height ? 'landscape' : 'portrait';
-      if (!outputPdf) {
-        outputPdf = new JsPdf({
-          orientation,
-          unit: 'pt',
-          format: [baseViewport.width, baseViewport.height],
-          compress: true
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      try {
+        await page.render({ canvasContext: context, viewport }).promise;
+        redactedLines += await redactCanvas(canvas);
+        const jpeg = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+        if (!jpeg) throw new Error('A masked PDF page could not be created.');
+        pages.push({
+          width: baseViewport.width,
+          height: baseViewport.height,
+          pixelWidth: canvas.width,
+          pixelHeight: canvas.height,
+          jpeg: new Uint8Array(await jpeg.arrayBuffer())
         });
-      } else {
-        outputPdf.addPage([baseViewport.width, baseViewport.height], orientation);
+      } finally {
+        page.cleanup();
+        canvas.width = 0;
+        canvas.height = 0;
       }
-      outputPdf.addImage(
-        canvas,
-        'PNG',
-        0,
-        0,
-        baseViewport.width,
-        baseViewport.height
-      );
-      page.cleanup();
     }
 
     if (!redactedLines) {
       throw new Error('No sensitive text was detected, so the download was blocked.');
     }
-    return new Blob([outputPdf.output('arraybuffer')], { type: 'application/pdf' });
+    return createImagePdf(pages);
   }
 
   async function createMaskedDownload(info, plaintext, originalBlob) {
