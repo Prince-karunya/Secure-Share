@@ -36,9 +36,9 @@
           <div class="mb-3">
             <div class="form-check">
               {{ form.mask_sensitive }}
-              <label class="form-check-label fw-semibold" for="{{ form.mask_sensitive.id_for_label }}">Mask sensitive information in previews</label>
+              <label class="form-check-label fw-semibold" for="{{ form.mask_sensitive.id_for_label }}">Mask sensitive information in previews and downloads</label>
             </div>
-            <div class="form-text">Masking is assisted and may miss sensitive text. It affects previews only; downloads remain original.</div>
+            <div class="form-text">Masking is assisted and may miss sensitive text. When downloads are enabled, they are masked too; a download is blocked if masking fails.</div>
           </div>
           <div class="mb-4">
             <div class="form-check">

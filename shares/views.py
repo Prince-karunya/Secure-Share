@@ -262,6 +262,66 @@ def mask_image_sensitive_data(image):
     return image
 
 
+def mask_download_content(plaintext, filename):
+    """Mask a supported file before returning it as a download."""
+    content_type = preview_content_type(filename)
+    if content_type is None:
+        raise ValueError("This file type cannot be safely masked.")
+    if content_type.startswith('text/'):
+        return (
+            mask_text(plaintext.decode('utf-8', errors='replace')).encode('utf-8'),
+            filename,
+            content_type,
+        )
+
+    from PIL import Image
+
+    if content_type.startswith('image/'):
+        with Image.open(io.BytesIO(plaintext)) as source_image:
+            image = source_image.convert('RGB')
+        image = mask_image_sensitive_data(image)
+        masked_buffer = io.BytesIO()
+        image.save(masked_buffer, format='PNG', optimize=True)
+        return masked_buffer.getvalue(), f'{Path(filename).stem}.png', 'image/png'
+
+    if content_type == 'application/pdf':
+        import pypdfium2 as pdfium
+
+        pages = []
+        document = pdfium.PdfDocument(plaintext)
+        try:
+            for page_index in range(len(document)):
+                page = document[page_index]
+                bitmap = None
+                try:
+                    bitmap = page.render(scale=1.5)
+                    image = bitmap.to_pil().convert('RGB')
+                    pages.append(mask_image_sensitive_data(image))
+                finally:
+                    if bitmap is not None:
+                        bitmap.close()
+                    page.close()
+        finally:
+            document.close()
+
+        if not pages:
+            raise ValueError("The PDF contains no pages to mask.")
+        masked_buffer = io.BytesIO()
+        try:
+            pages[0].save(
+                masked_buffer,
+                format='PDF',
+                save_all=True,
+                append_images=pages[1:],
+            )
+        finally:
+            for page_image in pages:
+                page_image.close()
+        return masked_buffer.getvalue(), filename, 'application/pdf'
+
+    raise ValueError("This file type cannot be safely masked.")
+
+
 @login_required
 def dashboard(request):
     """Show the signed-in user's upload history and share status."""
@@ -778,6 +838,15 @@ def download(request, token):
                 return unavailable(request)
             messages.error(request, "Incorrect password.")
         else:
+            is_download = action == 'download'
+            if is_download and shared_file.mask_sensitive and content_type is None:
+                log_access(shared_file, request, False, 'masked download format not supported')
+                messages.error(request, "This file type cannot be safely masked for download.")
+                return render(request, 'shares/download.html', {
+                    'shared_file': shared_file,
+                    'form': form,
+                    'can_preview': can_preview,
+                }, status=415)
             if action == 'view' and preview_content_type(shared_file.original_name) is None:
                 log_access(shared_file, request, False, 'preview format not supported')
                 messages.error(request, "This file type cannot be previewed in the browser.")
@@ -799,7 +868,23 @@ def download(request, token):
                 log_access(shared_file, request, False, 'decryption failed')
                 messages.error(request, "This file could not be decrypted.")
             else:
-                is_download = action == 'download'
+                download_name = shared_file.original_name
+                download_content_type = None
+                if is_download and shared_file.mask_sensitive:
+                    try:
+                        plaintext, download_name, download_content_type = mask_download_content(
+                            plaintext,
+                            shared_file.original_name,
+                        )
+                    except Exception:
+                        logger.exception("Could not safely mask a downloaded file.")
+                        log_access(shared_file, request, False, 'download masking failed')
+                        messages.error(request, "This file could not be masked safely and was not downloaded.")
+                        return render(request, 'shares/download.html', {
+                            'shared_file': shared_file,
+                            'form': form,
+                            'can_preview': can_preview,
+                        }, status=422)
                 if is_download:
                     shared_file.download_count += 1
                     shared_file.save(update_fields=['download_count'])
@@ -808,6 +893,10 @@ def download(request, token):
                         delete_shared_file(shared_file)
                 else:
                     log_access(shared_file, request, True, 'viewed')
+                response_content_type = (
+                    download_content_type if is_download
+                    else preview_content_type(shared_file.original_name)
+                )
                 if not is_download:
                     from html import escape
                     from django.utils.html import format_html, mark_safe
@@ -919,11 +1008,8 @@ window.addEventListener('focus', resumePreview);
                 response = FileResponse(
                     io.BytesIO(plaintext),
                     as_attachment=is_download,
-                    filename=shared_file.original_name,
-                    content_type=(
-                        None if is_download
-                        else preview_content_type(shared_file.original_name)
-                    ),
+                    filename=download_name,
+                    content_type=response_content_type,
                 )
                 if not is_download:
                     response['X-Content-Type-Options'] = 'nosniff'
@@ -1067,6 +1153,16 @@ def object_access(request, token):
     if action == 'download' and not shared_file.download_allowed:
         log_access(shared_file, request, False, 'download denied by uploader')
         return JsonResponse({'error': 'The uploader has disabled downloads.'}, status=403)
+    if (
+        action == 'download'
+        and shared_file.mask_sensitive
+        and preview_content_type(shared_file.original_name) is None
+    ):
+        log_access(shared_file, request, False, 'masked download format not supported')
+        return JsonResponse(
+            {'error': 'This file type cannot be safely masked for download.'},
+            status=415,
+        )
     if action == 'view':
         content_type = preview_content_type(shared_file.original_name)
         if content_type is None:

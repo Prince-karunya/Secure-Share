@@ -71,7 +71,7 @@ class UploadForm(forms.Form):
         initial=False,
     )
     mask_sensitive = forms.BooleanField(
-        label="Mask sensitive information in previews",
+        label="Mask sensitive information in previews and downloads",
         required=False,
         initial=False,
     )

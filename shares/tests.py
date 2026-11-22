@@ -1,4 +1,5 @@
 import base64
+import io
 import tempfile
 import os
 from pathlib import Path
@@ -295,6 +296,116 @@ class ShareOptionsTests(TestCase):
         self.assertNotIn('987 654-3210', masked)
         self.assertNotIn('1234 1234 1234', masked)
         self.assertNotIn('ABCDE1234F', masked)
+
+    def test_sensitive_text_is_masked_in_download(self):
+        """Return a masked text file when the uploader enables masking and downloads."""
+        original = 'Email test@example.com phone 987 654-3210'
+        shared_file = self.upload(
+            file=SimpleUploadedFile('notes.txt', original.encode()),
+            mask_sensitive='on',
+            download_allowed='on',
+        )
+
+        response = self.client.post(f'/f/{shared_file.token}/', {'action': 'download'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            b''.join(response.streaming_content).decode(),
+            mask_text(original),
+        )
+
+    def test_masked_image_download_contains_redactions(self):
+        """Generate the downloaded image from the masked image data."""
+        from PIL import Image, ImageDraw
+
+        source = Image.new('RGB', (8, 8), 'white')
+        source_buffer = io.BytesIO()
+        source.save(source_buffer, format='PNG')
+        shared_file = self.upload(
+            file=SimpleUploadedFile('photo.png', source_buffer.getvalue()),
+            mask_sensitive='on',
+        )
+
+        def redact(image):
+            ImageDraw.Draw(image).rectangle((0, 0, 2, 2), fill='black')
+            return image
+
+        with patch('shares.views.mask_image_sensitive_data', side_effect=redact):
+            response = self.client.post(
+                f'/f/{shared_file.token}/',
+                {'action': 'download'},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('filename="photo.png"', response['Content-Disposition'])
+        downloaded = Image.open(io.BytesIO(b''.join(response.streaming_content)))
+        self.assertEqual(downloaded.getpixel((1, 1)), (0, 0, 0))
+
+    def test_masked_pdf_download_rasterizes_and_masks_every_page(self):
+        """Return a masked PDF and run masking for each source page."""
+        from PIL import Image
+        import pypdfium2 as pdfium
+
+        source_buffer = io.BytesIO()
+        Image.new('RGB', (32, 32), 'white').save(
+            source_buffer,
+            format='PDF',
+            save_all=True,
+            append_images=[Image.new('RGB', (32, 32), 'white')],
+        )
+        shared_file = self.upload(
+            file=SimpleUploadedFile('invoice.pdf', source_buffer.getvalue()),
+            mask_sensitive='on',
+        )
+
+        with patch('shares.views.mask_image_sensitive_data', side_effect=lambda image: image) as mask:
+            response = self.client.post(
+                f'/f/{shared_file.token}/',
+                {'action': 'download'},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        downloaded = b''.join(response.streaming_content)
+        self.assertTrue(downloaded.startswith(b'%PDF'))
+        document = pdfium.PdfDocument(downloaded)
+        try:
+            self.assertEqual(len(document), 2)
+        finally:
+            document.close()
+        self.assertEqual(mask.call_count, 2)
+
+    def test_failed_download_masking_does_not_consume_download(self):
+        """Do not fall back to the original file if sensitive-data masking fails."""
+        shared_file = self.upload(mask_sensitive='on')
+        with patch(
+            'shares.views.mask_download_content',
+            side_effect=RuntimeError('OCR unavailable'),
+        ):
+            response = self.client.post(
+                f'/f/{shared_file.token}/',
+                {'action': 'download'},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertContains(response, 'could not be masked safely', status_code=422)
+        shared_file.refresh_from_db()
+        self.assertEqual(shared_file.download_count, 0)
+        self.assertFalse(shared_file.is_deleted)
+
+    def test_masked_download_rejects_unsupported_file_types(self):
+        """Do not return unsupported files unchanged when masking is enabled."""
+        shared_file = self.upload(
+            file=SimpleUploadedFile('archive.zip', b'private archive'),
+            mask_sensitive='on',
+        )
+
+        response = self.client.post(f'/f/{shared_file.token}/', {'action': 'download'})
+
+        self.assertEqual(response.status_code, 415)
+        self.assertContains(response, 'cannot be safely masked', status_code=415)
+        shared_file.refresh_from_db()
+        self.assertEqual(shared_file.download_count, 0)
+        self.assertFalse(shared_file.is_deleted)
 
     def test_vercel_allows_masked_pdf_preview_for_browser_ocr(self):
         """Allow masked PDF previews so browser OCR can redact them before display."""

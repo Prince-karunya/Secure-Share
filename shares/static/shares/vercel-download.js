@@ -139,7 +139,7 @@
     return redactedLines;
   }
 
-  async function showPdf(buffer, maskSensitive) {
+  async function loadPdfJs() {
     if (!window.pdfjsLib) {
       await new Promise((resolve, reject) => {
         const script = document.createElement('script');
@@ -149,7 +149,11 @@
         document.head.appendChild(script);
       });
     }
-    const pdfjs = window.pdfjsLib;
+    return window.pdfjsLib;
+  }
+
+  async function showPdf(buffer, maskSensitive) {
+    const pdfjs = await loadPdfJs();
     pdfjs.GlobalWorkerOptions.workerSrc =
       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     const pdf = await pdfjs.getDocument({ data: buffer }).promise;
@@ -180,16 +184,121 @@
     return redactedLines;
   }
 
+  async function loadJsPdf() {
+    if (!window.jspdf) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('The PDF download library could not be loaded.'));
+        document.head.appendChild(script);
+      });
+    }
+    return window.jspdf.jsPDF;
+  }
+
+  async function createMaskedPdf(buffer) {
+    const pdfjs = await loadPdfJs();
+    pdfjs.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const JsPdf = await loadJsPdf();
+    const sourcePdf = await pdfjs.getDocument({ data: buffer }).promise;
+    let outputPdf;
+    let redactedLines = 0;
+
+    for (let pageNumber = 1; pageNumber <= sourcePdf.numPages; pageNumber++) {
+      const page = await sourcePdf.getPage(pageNumber);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(3, 1800 / baseViewport.width, 2400 / baseViewport.height);
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      redactedLines += await redactCanvas(canvas);
+
+      const orientation = baseViewport.width > baseViewport.height ? 'landscape' : 'portrait';
+      if (!outputPdf) {
+        outputPdf = new JsPdf({
+          orientation,
+          unit: 'pt',
+          format: [baseViewport.width, baseViewport.height],
+          compress: true
+        });
+      } else {
+        outputPdf.addPage([baseViewport.width, baseViewport.height], orientation);
+      }
+      outputPdf.addImage(
+        canvas,
+        'PNG',
+        0,
+        0,
+        baseViewport.width,
+        baseViewport.height
+      );
+      page.cleanup();
+    }
+
+    if (!redactedLines) {
+      throw new Error('No sensitive text was detected, so the download was blocked.');
+    }
+    return new Blob([outputPdf.output('arraybuffer')], { type: 'application/pdf' });
+  }
+
+  async function createMaskedDownload(info, plaintext, originalBlob) {
+    if (info.content_type.startsWith('text/')) {
+      const text = maskText(new TextDecoder().decode(plaintext));
+      return {
+        blob: new Blob([text], { type: info.content_type }),
+        fileName: info.file_name
+      };
+    }
+
+    if (info.content_type === 'application/pdf') {
+      return {
+        blob: await createMaskedPdf(plaintext),
+        fileName: info.file_name
+      };
+    }
+
+    if (info.content_type.startsWith('image/')) {
+      const bitmap = await createImageBitmap(originalBlob);
+      const scale = Math.min(2.5, 3000 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      const redactedLines = await redactCanvas(canvas);
+      if (!redactedLines) {
+        throw new Error('No sensitive text was detected, so the download was blocked.');
+      }
+      const maskedBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      if (!maskedBlob) throw new Error('The masked image could not be created.');
+      return {
+        blob: maskedBlob,
+        fileName: `${info.file_name.replace(/\.[^.]+$/, '')}.png`
+      };
+    }
+
+    throw new Error('This file type cannot be safely masked for download.');
+  }
+
   async function present(info, plaintext) {
     const blob = new Blob([plaintext], { type: info.content_type });
     if (info.action === 'download') {
-      const url = URL.createObjectURL(blob);
+      const download = info.mask_sensitive
+        ? await createMaskedDownload(info, plaintext, blob)
+        : { blob, fileName: info.file_name };
+      const url = URL.createObjectURL(download.blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = info.file_name;
+      link.download = download.fileName;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-      status.textContent = 'Your decrypted download is ready.';
+      status.textContent = info.mask_sensitive
+        ? 'Your masked download is ready. Automated masking can miss sensitive text; review the file carefully.'
+        : 'Your decrypted download is ready.';
       return;
     }
 
