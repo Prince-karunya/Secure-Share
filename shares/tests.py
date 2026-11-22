@@ -93,6 +93,47 @@ class ShareOptionsTests(TestCase):
         self.assertContains(response, 'configuration is incomplete', status_code=503)
         self.assertContains(response, 'DATABASE_URL', status_code=503)
 
+    def test_vercel_database_initializer_requires_cron_secret(self):
+        """Protect the temporary production migration route with its bearer secret."""
+        environment = {
+            'CRON_SECRET': 'test-cron-secret',
+            'DJANGO_SECRET_KEY': 'test-secret',
+            'DATABASE_URL': 'postgresql://test:test@localhost/test',
+            'S3_BUCKET_NAME': 'test-bucket',
+            'S3_REGION': 'test-region',
+            'S3_ENDPOINT_URL': 'https://storage.example.test',
+            'S3_ACCESS_KEY_ID': 'test-access-key',
+            'S3_SECRET_ACCESS_KEY': 'test-secret-key',
+        }
+        with patch.dict(os.environ, environment):
+            with override_settings(VERCEL=True):
+                with patch('shares.views.call_command') as migrate:
+                    response = self.client.post('/api/initialize-database/')
+        self.assertEqual(response.status_code, 403)
+        migrate.assert_not_called()
+
+    def test_vercel_database_initializer_runs_migrations_when_authorized(self):
+        """Run pending migrations only for an authorized Vercel setup request."""
+        environment = {
+            'CRON_SECRET': 'test-cron-secret',
+            'DJANGO_SECRET_KEY': 'test-secret',
+            'DATABASE_URL': 'postgresql://test:test@localhost/test',
+            'S3_BUCKET_NAME': 'test-bucket',
+            'S3_REGION': 'test-region',
+            'S3_ENDPOINT_URL': 'https://storage.example.test',
+            'S3_ACCESS_KEY_ID': 'test-access-key',
+            'S3_SECRET_ACCESS_KEY': 'test-secret-key',
+        }
+        with patch.dict(os.environ, environment):
+            with override_settings(VERCEL=True):
+                with patch('shares.views.call_command') as migrate:
+                    response = self.client.post(
+                        '/api/initialize-database/',
+                        HTTP_AUTHORIZATION='Bearer test-cron-secret',
+                    )
+        self.assertEqual(response.status_code, 200)
+        migrate.assert_called_once_with('migrate', interactive=False)
+
     def test_qr_uses_configured_reachable_base_url(self):
         """Generate QR content for the configured share URL, not localhost."""
         shared_file = self.upload()

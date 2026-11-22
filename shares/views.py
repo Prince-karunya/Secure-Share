@@ -11,12 +11,14 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth import login
 from django.contrib.auth.hashers import check_password, make_password
+from django.core.management import call_command
 from django.db.models import F
 from django.db.models import Q
 from django.http import FileResponse, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.views.decorators.http import require_GET
 import re
@@ -754,6 +756,20 @@ def vercel_cleanup(request):
         return HttpResponse(status=403)
     cleanup_expired_shares()
     return JsonResponse({'status': 'ok'})
+
+
+@csrf_exempt
+@require_POST
+def initialize_vercel_database(request):
+    """Run pending production migrations for the one-time deployment setup."""
+    expected = os.environ.get('CRON_SECRET', '')
+    supplied = request.headers.get('Authorization', '')
+    if not settings.VERCEL or not expected or not secrets.compare_digest(
+        supplied, f'Bearer {expected}'
+    ):
+        return HttpResponse(status=403)
+    call_command('migrate', interactive=False)
+    return JsonResponse({'status': 'migrations applied'})
 
 
 @require_POST

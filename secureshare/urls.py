@@ -17,10 +17,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 
-from shares.views import register
+from shares.views import initialize_vercel_database, register
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/initialize-database/', initialize_vercel_database),
     path('api/cleanup/', include('shares.cleanup_urls')),
     path('accounts/signup/', register, name='account_signup'),
     path('accounts/', include('allauth.urls')),
