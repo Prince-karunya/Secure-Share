@@ -26,8 +26,8 @@ class DeploymentConfigurationMiddleware:
             missing = [key for key in required if not os.environ.get(key)]
             if missing:
                 return HttpResponse(
-                    'Deployment configuration is incomplete. Set the required '
-                    'environment variables in Vercel project settings.',
+                    'Deployment configuration is incomplete. Set these environment '
+                    f'variables in Vercel project settings: {", ".join(missing)}.',
                     status=503,
                     content_type='text/plain',
                 )

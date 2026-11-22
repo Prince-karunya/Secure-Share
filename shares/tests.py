@@ -91,6 +91,7 @@ class ShareOptionsTests(TestCase):
                 response = self.client.get('/accounts/login/')
         self.assertEqual(response.status_code, 503)
         self.assertContains(response, 'configuration is incomplete', status_code=503)
+        self.assertContains(response, 'DATABASE_URL', status_code=503)
 
     def test_qr_uses_configured_reachable_base_url(self):
         """Generate QR content for the configured share URL, not localhost."""
