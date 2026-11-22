@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import io
 import logging
 import os
@@ -23,8 +25,15 @@ import re
 
 from .crypto_utils import decrypt_bytes, encrypt_bytes
 from .file_types import PREVIEW_CONTENT_TYPES
-from .forms import DownloadForm, RegistrationForm, UploadForm, VERCEL_UPLOAD_SIZE
-from .models import AccessLog, SharedFile
+from .forms import (
+    DANGEROUS_EXTENSIONS,
+    MAX_UPLOAD_SIZE,
+    DownloadForm,
+    RegistrationForm,
+    UploadForm,
+    VERCEL_UPLOAD_SIZE,
+)
+from .models import AccessLog, LibraryDocument, SharedFile
 from . import object_storage
 
 logger = logging.getLogger(__name__)
@@ -34,6 +43,45 @@ def encrypted_file_path(shared_file):
     """Build a safe path to the encrypted file for a database record."""
     from django.conf import settings
     return Path(settings.ENCRYPTED_FILES_DIR) / shared_file.stored_name
+
+
+def library_key_for_user(user):
+    """Derive the account's browser-delivered document-library encryption key."""
+    message = f"secureshare-library-v1:{user.pk}".encode('utf-8')
+    return hmac.new(settings.SECRET_KEY.encode('utf-8'), message, hashlib.sha256).digest()
+
+
+def library_document_path(document):
+    """Build the private on-disk path for an encrypted library document."""
+    return Path(settings.ENCRYPTED_FILES_DIR) / document.stored_name
+
+
+def library_upload_pending(document, user):
+    """Return whether this user's library upload is still pending and valid."""
+    return (
+        document.owner_id == user.id
+        and not document.is_ready
+        and document.pending_until is not None
+        and document.pending_until > timezone.now()
+    )
+
+
+def cleanup_pending_library_uploads():
+    """Remove expired, unfinished library uploads from storage and the database."""
+    expired = LibraryDocument.objects.filter(
+        is_ready=False,
+        pending_until__lte=timezone.now(),
+    ).exclude(pending_until__isnull=True).order_by('pending_until')[:20]
+    for document in expired:
+        try:
+            if settings.USE_OBJECT_STORAGE:
+                object_storage.delete_object(document.stored_name)
+            else:
+                library_document_path(document).unlink(missing_ok=True)
+        except Exception:
+            logger.exception("Could not clean up an expired library upload.")
+            continue
+        document.delete()
 
 
 def delete_shared_file(shared_file, defer_object_delete=False):
@@ -221,6 +269,336 @@ def dashboard(request):
     return render(request, 'shares/dashboard.html', {
         'shares': shares,
         'client_encrypted_download': settings.USE_OBJECT_STORAGE,
+    })
+
+
+@login_required
+def library(request):
+    """Show the signed-in user's private, reusable document library."""
+    cleanup_pending_library_uploads()
+    documents = LibraryDocument.objects.filter(
+        owner=request.user,
+        is_ready=True,
+    ).order_by('-created_at')
+    return render(request, 'shares/library.html', {
+        'documents': documents,
+        'max_upload_size_mb': (
+            50 if settings.USE_OBJECT_STORAGE else MAX_UPLOAD_SIZE // (1024 * 1024)
+        ),
+    })
+
+
+@login_required
+@require_POST
+def library_upload_init(request):
+    """Create a short-lived upload record for a browser-encrypted library file."""
+    cleanup_pending_library_uploads()
+    file_name = request.POST.get('file_name', '').strip()
+    try:
+        file_size = int(request.POST.get('file_size', '0'))
+    except ValueError:
+        return JsonResponse({'error': 'Choose a valid file.'}, status=400)
+    maximum_size = VERCEL_UPLOAD_SIZE if settings.USE_OBJECT_STORAGE else MAX_UPLOAD_SIZE
+    normalized_name = file_name.replace('\\', '/')
+    extension = Path(normalized_name).suffix.lower()
+    if (
+        not file_name
+        or len(file_name) > 255
+        or Path(normalized_name).name != file_name
+        or extension in DANGEROUS_EXTENSIONS
+    ):
+        return JsonResponse({'error': 'This file name or type is not allowed.'}, status=400)
+    if file_size < 1 or file_size > maximum_size:
+        return JsonResponse({
+            'error': f'Choose a file no larger than {maximum_size // (1024 * 1024)} MB.'
+        }, status=400)
+
+    token = secrets.token_urlsafe(24)
+    nonce = secrets.token_bytes(12)
+    stored_name = (
+        f"library/pending/{token}.enc"
+        if settings.USE_OBJECT_STORAGE else f"library-{token}.enc"
+    )
+    document = LibraryDocument.objects.create(
+        owner=request.user,
+        original_name=file_name,
+        stored_name=stored_name,
+        nonce=nonce,
+        file_size=file_size,
+        pending_until=timezone.now() + timezone.timedelta(minutes=15),
+    )
+    response = {
+        'token': str(document.pk),
+        'library_key': base64.b64encode(library_key_for_user(request.user)).decode('ascii'),
+        'nonce': base64.b64encode(nonce).decode('ascii'),
+    }
+    if settings.USE_OBJECT_STORAGE:
+        try:
+            response['upload_url'] = object_storage.create_upload_url(stored_name)
+        except Exception:
+            logger.exception("Could not create an object-storage library upload URL.")
+            document.delete()
+            return JsonResponse({'error': 'Secure upload could not be started.'}, status=503)
+    else:
+        response['upload_url'] = reverse('library_upload_bytes', kwargs={'document_id': document.pk})
+    json_response = JsonResponse(response)
+    json_response['Cache-Control'] = 'private, no-store'
+    return json_response
+
+
+@login_required
+@require_POST
+def library_upload_bytes(request, document_id):
+    """Store an encrypted library upload in local private storage."""
+    if settings.USE_OBJECT_STORAGE:
+        return JsonResponse({'error': 'Use the private object-storage upload URL.'}, status=400)
+    try:
+        document = LibraryDocument.objects.get(pk=document_id, owner=request.user)
+    except LibraryDocument.DoesNotExist:
+        return JsonResponse({'error': 'The library upload could not be found.'}, status=404)
+    if not library_upload_pending(document, request.user):
+        return JsonResponse({'error': 'The upload session expired. Please try again.'}, status=410)
+    encrypted_upload = request.FILES.get('encrypted_file')
+    if not encrypted_upload or encrypted_upload.size != document.file_size + 16:
+        return JsonResponse({'error': 'Uploaded file size did not match the selected file.'}, status=400)
+    try:
+        path = library_document_path(document)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('wb') as destination:
+            for chunk in encrypted_upload.chunks():
+                destination.write(chunk)
+    except OSError:
+        logger.exception("Could not save an encrypted library document.")
+        return JsonResponse({'error': 'The encrypted document could not be saved.'}, status=500)
+    document.is_ready = True
+    document.pending_until = None
+    document.save(update_fields=['is_ready', 'pending_until'])
+    return JsonResponse({'success': True})
+
+
+@login_required
+@require_POST
+def library_upload_finalize(request):
+    """Verify and activate an encrypted object-storage library upload."""
+    if not settings.USE_OBJECT_STORAGE:
+        return JsonResponse({'error': 'Private object storage is not configured.'}, status=503)
+    try:
+        document = LibraryDocument.objects.get(
+            pk=request.POST.get('token', ''),
+            owner=request.user,
+        )
+    except (LibraryDocument.DoesNotExist, ValueError):
+        return JsonResponse({'error': 'The library upload could not be found.'}, status=404)
+    if not library_upload_pending(document, request.user):
+        return JsonResponse({'error': 'The upload session expired. Please try again.'}, status=410)
+    try:
+        stored_size = object_storage.object_size(document.stored_name)
+    except Exception:
+        logger.exception("Could not verify an uploaded encrypted library document.")
+        return JsonResponse({'error': 'Uploaded file could not be verified.'}, status=502)
+    if stored_size != document.file_size + 16:
+        return JsonResponse({'error': 'Uploaded file size did not match the selected file.'}, status=400)
+
+    permanent_key = f"library/{secrets.token_urlsafe(24)}.enc"
+    try:
+        object_storage.promote_object(document.stored_name, permanent_key)
+    except Exception:
+        logger.exception("Could not promote an object-storage library upload.")
+        return JsonResponse({'error': 'Uploaded file could not be finalized.'}, status=502)
+    document.stored_name = permanent_key
+    document.is_ready = True
+    document.pending_until = None
+    document.save(update_fields=['stored_name', 'is_ready', 'pending_until'])
+    return JsonResponse({'success': True})
+
+
+@login_required
+@require_GET
+def library_ciphertext(request, document_id):
+    """Return only the signed-in owner's encrypted library file bytes."""
+    try:
+        document = LibraryDocument.objects.get(
+            pk=document_id,
+            owner=request.user,
+            is_ready=True,
+        )
+    except LibraryDocument.DoesNotExist:
+        return JsonResponse({'error': 'The document is not available.'}, status=404)
+    try:
+        encrypted_file = open(library_document_path(document), 'rb')
+    except OSError:
+        logger.exception("Could not read an encrypted library document.")
+        return JsonResponse({'error': 'The document is not available.'}, status=404)
+    response = FileResponse(encrypted_file, content_type='application/octet-stream')
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@login_required
+@require_POST
+def library_delete(request, document_id):
+    """Delete an encrypted document from the signed-in user's library."""
+    try:
+        document = LibraryDocument.objects.get(pk=document_id, owner=request.user)
+    except LibraryDocument.DoesNotExist:
+        return unavailable(request)
+    if settings.USE_OBJECT_STORAGE:
+        try:
+            object_storage.delete_object(document.stored_name)
+        except Exception:
+            logger.exception("Could not delete an encrypted library document.")
+            messages.error(request, "The document could not be deleted. Please try again.")
+            return redirect('library')
+    else:
+        library_document_path(document).unlink(missing_ok=True)
+    document.delete()
+    messages.success(request, "The document was deleted from your library.")
+    return redirect('library')
+
+
+@login_required
+def library_share(request, document_id):
+    """Show the sharing options before creating a link for a library document."""
+    try:
+        document = LibraryDocument.objects.get(
+            pk=document_id,
+            owner=request.user,
+            is_ready=True,
+        )
+    except LibraryDocument.DoesNotExist:
+        return unavailable(request)
+    form = UploadForm()
+    form.fields['file'].required = False
+    return render(request, 'shares/library_share.html', {
+        'document': document,
+        'form': form,
+        'client_encrypted_share': True,
+        'share_init_url': reverse('library_share_init', kwargs={'document_id': document.pk}),
+    })
+
+
+@login_required
+@require_POST
+def library_share_init(request, document_id):
+    """Validate share settings and prepare encrypted bytes from a library document."""
+    try:
+        document = LibraryDocument.objects.get(
+            pk=document_id,
+            owner=request.user,
+            is_ready=True,
+        )
+    except LibraryDocument.DoesNotExist:
+        return JsonResponse({'error': 'The document is not available.'}, status=404)
+
+    form_data = request.POST.copy()
+    form_data['file_name'] = document.original_name
+    form_data['file_size'] = str(document.file_size)
+    form = UploadForm(form_data)
+    form.fields['file'].required = False
+    if not form.is_valid():
+        return JsonResponse({'errors': form.errors.get_json_data()}, status=400)
+
+    password_protected = form.cleaned_data['password_enabled']
+    password = form.cleaned_data['password'] if password_protected else None
+    token = secrets.token_urlsafe(12)
+    object_key = (
+        f"pending/{secrets.token_urlsafe(24)}.enc"
+        if settings.USE_OBJECT_STORAGE
+        else f"pending-{secrets.token_urlsafe(24)}.enc"
+    )
+    salt = secrets.token_bytes(16)
+    nonce = secrets.token_bytes(12)
+    expiry_minutes = form.cleaned_data['expiry']
+    shared_file = SharedFile.objects.create(
+        token=token,
+        original_name=document.original_name,
+        stored_name=object_key,
+        password_hash=make_password(password) if password_protected else '',
+        salt=salt,
+        nonce=nonce,
+        file_size=document.file_size,
+        expires_at=(
+            timezone.now() + timezone.timedelta(minutes=int(expiry_minutes))
+            if expiry_minutes else None
+        ),
+        password_protected=password_protected,
+        download_allowed=form.cleaned_data['download_allowed'],
+        mask_sensitive=form.cleaned_data['mask_sensitive'],
+        max_downloads=int(form.cleaned_data['max_downloads'] or 1),
+        owner=request.user,
+        is_deleted=True,
+        storage_delete_after=timezone.now() + timezone.timedelta(minutes=15),
+    )
+    if settings.USE_OBJECT_STORAGE:
+        try:
+            source_url = object_storage.create_download_url(document.stored_name)
+            upload_url = object_storage.create_upload_url(object_key)
+        except Exception:
+            logger.exception("Could not prepare object-storage access for a library share.")
+            shared_file.delete()
+            return JsonResponse({'error': 'Secure sharing could not be started.'}, status=503)
+    else:
+        upload_url = reverse('share_upload_bytes', kwargs={'token': token})
+        source_url = reverse('library_ciphertext', kwargs={'document_id': document.pk})
+
+    response = JsonResponse({
+        'token': token,
+        'salt': base64.b64encode(salt).decode('ascii'),
+        'nonce': base64.b64encode(nonce).decode('ascii'),
+        'upload_url': upload_url,
+        'source_url': source_url,
+        'library_key': base64.b64encode(library_key_for_user(request.user)).decode('ascii'),
+        'library_nonce': base64.b64encode(bytes(document.nonce)).decode('ascii'),
+        'file_size': document.file_size,
+        'finalize_url': (
+            reverse('upload_finalize') if settings.USE_OBJECT_STORAGE
+            else reverse('share_upload_bytes', kwargs={'token': token})
+        ),
+        'created_url': reverse('created', kwargs={'token': token}),
+        'password_protected': password_protected,
+    })
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@login_required
+@require_POST
+def share_upload_bytes(request, token):
+    """Save locally encrypted share bytes and activate the completed share."""
+    if settings.USE_OBJECT_STORAGE:
+        return JsonResponse({'error': 'Use the private object-storage upload URL.'}, status=400)
+    try:
+        shared_file = SharedFile.objects.get(
+            token=token,
+            owner=request.user,
+            is_deleted=True,
+        )
+    except SharedFile.DoesNotExist:
+        return JsonResponse({'error': 'The share upload could not be found.'}, status=404)
+    if not shared_file.storage_delete_after or shared_file.storage_delete_after <= timezone.now():
+        return JsonResponse({'error': 'The upload session expired. Please try again.'}, status=410)
+    encrypted_upload = request.FILES.get('encrypted_file')
+    if not encrypted_upload or encrypted_upload.size != shared_file.file_size + 16:
+        return JsonResponse({'error': 'Uploaded file size did not match the selected file.'}, status=400)
+    shared_file.stored_name = f"{secrets.token_urlsafe(24)}.enc"
+    try:
+        path = encrypted_file_path(shared_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('wb') as destination:
+            for chunk in encrypted_upload.chunks():
+                destination.write(chunk)
+    except OSError:
+        logger.exception("Could not save an encrypted shared document.")
+        return JsonResponse({'error': 'The encrypted file could not be saved.'}, status=500)
+    shared_file.is_deleted = False
+    shared_file.storage_delete_after = None
+    shared_file.save(update_fields=['stored_name', 'is_deleted', 'storage_delete_after'])
+    delete_tokens = request.session.get('delete_tokens', [])
+    delete_tokens.append(shared_file.token)
+    request.session['delete_tokens'] = delete_tokens
+    return JsonResponse({
+        'created_url': reverse('created', kwargs={'token': shared_file.token}),
+        'password_protected': shared_file.password_protected,
     })
 
 

@@ -1,13 +1,16 @@
+import base64
 import tempfile
 import os
 from pathlib import Path
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
-from .models import SharedFile
+from .crypto_utils import derive_key
+from .models import LibraryDocument, SharedFile
 from .forms import MAX_UPLOAD_SIZE, UploadForm
 from .views import mask_text, mask_image_sensitive_data
 
@@ -407,5 +410,222 @@ class ShareOptionsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Allow downloads because this file type cannot be previewed')
         self.assertEqual(SharedFile.objects.count(), 0)
+
+
+class DocumentLibraryTests(TestCase):
+    """Verify private document storage and sharing from the account library."""
+
+    def setUp(self):
+        """Create an authenticated account and isolated encrypted storage."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        override = override_settings(ENCRYPTED_FILES_DIR=Path(self.temp_dir.name))
+        override.enable()
+        self.addCleanup(override.disable)
+        self.user = get_user_model().objects.create_user(
+            username='libraryuser',
+            email='library@example.com',
+            password='securepass',
+        )
+        self.client.force_login(self.user)
+
+    def store_document(self, name='private.txt', content=b'private library contents'):
+        """Create a browser-encrypted document using the library upload API."""
+        response = self.client.post('/api/library/init/', {
+            'file_name': name,
+            'file_size': len(content),
+        })
+        self.assertEqual(response.status_code, 200)
+        info = response.json()
+        document = LibraryDocument.objects.get(pk=info['token'])
+        key = base64.b64decode(info['library_key'])
+        ciphertext = AESGCM(key).encrypt(bytes(document.nonce), content, None)
+        response = self.client.post(
+            info['upload_url'],
+            {'encrypted_file': SimpleUploadedFile(
+                name + '.enc',
+                ciphertext,
+                content_type='application/octet-stream',
+            )},
+        )
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        return document, content, key
+
+    def test_library_requires_login_and_hides_documents_from_other_users(self):
+        """Only the owning authenticated account can list or read a library file."""
+        document, _, _ = self.store_document()
+        self.client.logout()
+        self.assertEqual(self.client.get('/library/').status_code, 302)
+
+        other_user = get_user_model().objects.create_user(
+            username='otherlibraryuser',
+            email='other-library@example.com',
+            password='securepass',
+        )
+        self.client.force_login(other_user)
+        self.assertEqual(self.client.get('/library/').status_code, 200)
+        self.assertNotContains(self.client.get('/library/'), document.original_name)
+        self.assertEqual(self.client.get(f'/library/{document.pk}/ciphertext/').status_code, 404)
+        self.assertEqual(self.client.get(f'/library/{document.pk}/share/').status_code, 410)
+
+    def test_library_document_can_create_a_separate_share(self):
+        """Ask for share options and create an independent encrypted share copy."""
+        document, content, library_key = self.store_document()
+        response = self.client.get(f'/library/{document.pk}/share/')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Set an expiry time')
+        self.assertContains(response, 'Allow recipients to download')
+        self.assertContains(response, 'Maximum downloads')
+        self.assertContains(response, 'Require a password')
+
+        password = 'share-pass'
+        response = self.client.post(f'/api/library/{document.pk}/share/init/', {
+            'expiry_enabled': 'on',
+            'expiry': '60',
+            'download_allowed': 'on',
+            'max_downloads': '3',
+            'password_enabled': 'on',
+            'password': password,
+            'mask_sensitive': 'on',
+        })
+        self.assertEqual(response.status_code, 200)
+        share_info = response.json()
+        source_response = self.client.get(share_info['source_url'])
+        encrypted_library_copy = b''.join(source_response.streaming_content)
+        self.assertEqual(len(encrypted_library_copy), len(content) + 16)
+        decrypted = AESGCM(library_key).decrypt(
+            bytes(document.nonce),
+            encrypted_library_copy,
+            None,
+        )
+        share_key = derive_key(password, base64.b64decode(share_info['salt']))
+        share_ciphertext = AESGCM(share_key).encrypt(
+            base64.b64decode(share_info['nonce']),
+            decrypted,
+            None,
+        )
+        response = self.client.post(
+            share_info['upload_url'],
+            {'encrypted_file': SimpleUploadedFile(
+                'encrypted-share.enc',
+                share_ciphertext,
+                content_type='application/octet-stream',
+            )},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        shared_file = SharedFile.objects.get(token=share_info['token'])
+        self.assertFalse(shared_file.is_deleted)
+        self.assertEqual(
+            (Path(self.temp_dir.name) / shared_file.stored_name).read_bytes(),
+            share_ciphertext,
+        )
+        self.assertEqual(
+            AESGCM(share_key).decrypt(
+                bytes(shared_file.nonce),
+                (Path(self.temp_dir.name) / shared_file.stored_name).read_bytes(),
+                None,
+            ),
+            content,
+        )
+        self.assertTrue(LibraryDocument.objects.filter(pk=document.pk, is_ready=True).exists())
+        self.assertEqual(
+            AESGCM(library_key).decrypt(
+                bytes(document.nonce),
+                (Path(self.temp_dir.name) / document.stored_name).read_bytes(),
+                None,
+            ),
+            content,
+        )
+
+    def test_library_upload_rejects_dangerous_files_and_other_users_cannot_delete(self):
+        """Reject executable uploads and enforce ownership for library deletion."""
+        response = self.client.post('/api/library/init/', {
+            'file_name': 'payload.exe',
+            'file_size': 12,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(LibraryDocument.objects.count(), 0)
+
+        document, _, _ = self.store_document()
+        other_user = get_user_model().objects.create_user(
+            username='deleteattempt',
+            email='deleteattempt@example.com',
+            password='securepass',
+        )
+        self.client.force_login(other_user)
+        self.assertEqual(self.client.post(f'/library/{document.pk}/delete/').status_code, 410)
+        self.assertTrue(LibraryDocument.objects.filter(pk=document.pk).exists())
+
+    def test_local_library_upload_streams_files_over_the_default_request_limit(self):
+        """Store a file larger than Django's in-memory request limit through upload chunks."""
+        content = b'x' * (3 * 1024 * 1024)
+        document, stored_content, key = self.store_document(
+            name='large-document.txt',
+            content=content,
+        )
+        self.assertEqual(len(stored_content), len(content))
+        ciphertext = (Path(self.temp_dir.name) / document.stored_name).read_bytes()
+        self.assertEqual(
+            AESGCM(key).decrypt(bytes(document.nonce), ciphertext, None),
+            content,
+        )
+
+    def test_object_storage_library_upload_is_encrypted_and_verified(self):
+        """Use private direct storage and verify ciphertext before listing a Vercel file."""
+        with override_settings(USE_OBJECT_STORAGE=True):
+            with patch(
+                'shares.views.object_storage.create_upload_url',
+                return_value='https://storage.example.test/signed-upload',
+            ):
+                response = self.client.post('/api/library/init/', {
+                    'file_name': 'cloud.txt',
+                    'file_size': 20,
+                })
+            self.assertEqual(response.status_code, 200)
+            info = response.json()
+            document = LibraryDocument.objects.get(pk=info['token'])
+            self.assertTrue(document.stored_name.startswith('library/pending/'))
+
+            with patch(
+                'shares.views.object_storage.object_size',
+                return_value=document.file_size + 16,
+            ), patch('shares.views.object_storage.promote_object') as promote:
+                response = self.client.post('/api/library/finalize/', {'token': document.pk})
+
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        self.assertTrue(document.is_ready)
+        self.assertTrue(document.stored_name.startswith('library/'))
+        self.assertFalse(document.stored_name.startswith('library/pending/'))
+        promote.assert_called_once()
+
+    def test_object_storage_library_share_creates_a_copy_from_private_storage(self):
+        """Prepare source decryption and a distinct recipient-encrypted Vercel share."""
+        document, _, _ = self.store_document()
+        with override_settings(USE_OBJECT_STORAGE=True):
+            with patch(
+                'shares.views.object_storage.create_upload_url',
+                return_value='https://storage.example.test/share-upload',
+            ), patch(
+                'shares.views.object_storage.create_download_url',
+                return_value='https://storage.example.test/library-download',
+            ):
+                response = self.client.post(f'/api/library/{document.pk}/share/init/', {
+                    'expiry_enabled': 'on',
+                    'expiry': '60',
+                    'download_allowed': 'on',
+                    'max_downloads': '3',
+                    'password_enabled': 'on',
+                    'password': 'share-pass',
+                })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['source_url'], 'https://storage.example.test/library-download')
+        self.assertEqual(response.json()['upload_url'], 'https://storage.example.test/share-upload')
+        shared_file = SharedFile.objects.get(token=response.json()['token'])
+        self.assertEqual(shared_file.owner, self.user)
+        self.assertTrue(shared_file.is_deleted)
 
 # Create your tests here.

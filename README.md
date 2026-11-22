@@ -21,8 +21,17 @@ previews.
 ## Accounts and history
 
 Users can register or log in with either their email address or username and
-password. Uploaded documents are owned by the signed-in account and appear in
-`/dashboard/`.
+password. New shares and their download history are tied to the signed-in
+account and appear in `/dashboard/`.
+
+The signed-in **Document library** stores reusable files encrypted in the
+browser. Only the owning account can access the library. Choose **Share** on a
+stored document to select its expiry, recipient password, download permission
+and limit, and preview masking before creating a link. Sharing creates a
+separate encrypted copy; deleting or expiring that link does not remove the
+library document. Library files remain until you delete them. Keep
+`DJANGO_SECRET_KEY` unchanged and backed up so stored library files remain
+decryptable.
 
 For local image and PDF previews, install Tesseract OCR separately and make
 sure `tesseract` is on `PATH`. On Vercel, the recipient's browser uses

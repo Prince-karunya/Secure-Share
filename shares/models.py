@@ -48,6 +48,27 @@ class SharedFile(models.Model):
         return self.original_name
 
 
+class LibraryDocument(models.Model):
+    """Keep an account-owned encrypted document independently of share links."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='library_documents',
+    )
+    original_name = models.CharField(max_length=255)
+    stored_name = models.CharField(max_length=255)
+    nonce = models.BinaryField()
+    file_size = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_ready = models.BooleanField(default=False)
+    pending_until = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        """Return a readable document name for the admin and shell."""
+        return self.original_name
+
+
 class AccessLog(models.Model):
     shared_file = models.ForeignKey(SharedFile, on_delete=models.CASCADE, related_name='access_logs')
     ip_address = models.GenericIPAddressField(null=True, blank=True)

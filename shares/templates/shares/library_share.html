@@ -1,0 +1,82 @@
+{% extends "shares/base.html" %}
+{% load static %}
+{% block title %}Share {{ document.original_name }} - SecureShare{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-xl-8 col-lg-9">
+    <div class="card ss-card">
+      <div class="card-body p-4 p-md-5">
+        <a class="small" href="{% url 'library' %}">&larr; Back to document library</a>
+        <h1 class="h2 page-heading mt-3 mb-2">Share a library document</h1>
+        <p class="text-muted mb-4"><strong>{{ document.original_name }}</strong> · {{ document.file_size|filesizeformat }}</p>
+        <p class="alert alert-info">Choose the link options below. A separate encrypted copy will be created; your library document will not be changed or deleted.</p>
+        <form id="library-share-form" data-init-url="{{ share_init_url }}">
+          {% csrf_token %}
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.expiry_enabled }}
+              <label class="form-check-label fw-semibold" for="{{ form.expiry_enabled.id_for_label }}">Set an expiry time</label>
+            </div>
+            <div id="expiry-options" class="mt-2">
+              <label class="form-label" for="{{ form.expiry.id_for_label }}">Expires after</label>
+              {{ form.expiry }}
+            </div>
+          </div>
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.download_allowed }}
+              <label class="form-check-label fw-semibold" for="{{ form.download_allowed.id_for_label }}">Allow recipients to download the file?</label>
+            </div>
+            <div class="form-text">When disabled, recipients can preview supported file types in their browser.</div>
+          </div>
+          <div id="download-limit-options" class="mb-3" hidden>
+            <label class="form-label fw-semibold" for="{{ form.max_downloads.id_for_label }}">Maximum downloads</label>
+            {{ form.max_downloads }}
+          </div>
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.mask_sensitive }}
+              <label class="form-check-label fw-semibold" for="{{ form.mask_sensitive.id_for_label }}">Mask sensitive information in previews</label>
+            </div>
+            <div class="form-text">Masking is assisted and may miss sensitive text. It affects previews only; downloads remain original.</div>
+          </div>
+          <div class="mb-4">
+            <div class="form-check">
+              {{ form.password_enabled }}
+              <label class="form-check-label fw-semibold" for="{{ form.password_enabled.id_for_label }}">Require a password</label>
+            </div>
+            <div id="password-options" class="mt-2">
+              <label class="form-label" for="{{ form.password.id_for_label }}">Password (at least 6 characters)</label>
+              {{ form.password }}
+            </div>
+          </div>
+          <button class="btn btn-primary w-100" type="submit">Encrypt and create share link</button>
+          <div id="library-share-status" class="small mt-3" role="status" aria-live="polite"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+document.querySelectorAll('input[type="password"]').forEach(function (el) { el.classList.add('form-control'); });
+document.querySelectorAll('select').forEach(function (el) { el.classList.add('form-select'); });
+function syncOption(checkbox, target, requiredInput) {
+  target.hidden = !checkbox.checked;
+  requiredInput.disabled = !checkbox.checked;
+  requiredInput.required = checkbox.checked;
+}
+const expiryToggle = document.getElementById('{{ form.expiry_enabled.id_for_label }}');
+const expirySelect = document.getElementById('{{ form.expiry.id_for_label }}');
+const passwordToggle = document.getElementById('{{ form.password_enabled.id_for_label }}');
+const passwordInput = document.getElementById('{{ form.password.id_for_label }}');
+const downloadToggle = document.getElementById('{{ form.download_allowed.id_for_label }}');
+const downloadLimit = document.getElementById('{{ form.max_downloads.id_for_label }}');
+expiryToggle.addEventListener('change', function () { syncOption(expiryToggle, document.getElementById('expiry-options'), expirySelect); });
+passwordToggle.addEventListener('change', function () { syncOption(passwordToggle, document.getElementById('password-options'), passwordInput); });
+downloadToggle.addEventListener('change', function () { syncOption(downloadToggle, document.getElementById('download-limit-options'), downloadLimit); });
+syncOption(expiryToggle, document.getElementById('expiry-options'), expirySelect);
+syncOption(passwordToggle, document.getElementById('password-options'), passwordInput);
+syncOption(downloadToggle, document.getElementById('download-limit-options'), downloadLimit);
+</script>
+<script src="{% static 'shares/library-share.js' %}" defer></script>
+{% endblock %}

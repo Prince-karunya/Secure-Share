@@ -4,9 +4,12 @@
 <div class="d-flex align-items-end justify-content-between mb-4">
   <div>
     <p class="text-uppercase text-muted fw-bold small mb-2">Workspace</p>
-    <h1 class="h2 page-heading mb-0">My document history</h1>
+    <h1 class="h2 page-heading mb-0">Share history</h1>
   </div>
-  <a class="btn btn-primary" href="{% url 'upload' %}">+ Share document</a>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-primary" href="{% url 'library' %}">Document library</a>
+    <a class="btn btn-primary" href="{% url 'upload' %}">+ Create share</a>
+  </div>
 </div>
 <div class="card ss-card">
   <div class="table-responsive">

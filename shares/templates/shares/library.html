@@ -1,0 +1,56 @@
+{% extends "shares/base.html" %}
+{% load static %}
+{% block title %}Document library - SecureShare{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-end justify-content-between gap-3 mb-4">
+  <div>
+    <p class="text-uppercase text-muted fw-bold small mb-2">Private workspace</p>
+    <h1 class="h2 page-heading mb-1">Document library</h1>
+    <p class="text-muted mb-0">Only your signed-in account can access these encrypted documents.</p>
+  </div>
+  <a class="btn btn-outline-primary" href="{% url 'dashboard' %}">Share history</a>
+</div>
+<div class="card ss-card mb-4">
+  <div class="card-body p-4">
+    <h2 class="h5 mb-2">Store a document</h2>
+    <p class="text-muted">Files stay here until you delete them. Creating a share makes a separate encrypted copy, so the library document remains available after the link expires.</p>
+    <form id="library-upload-form"
+          data-init-url="{% url 'library_upload_init' %}"
+          data-finalize-url="{% url 'library_upload_finalize' %}"
+          data-library-url="{% url 'library' %}">
+      {% csrf_token %}
+      <label class="form-label fw-semibold" for="library-file">Choose a document</label>
+      <input class="form-control" id="library-file" type="file" required>
+      <div class="form-text">Maximum {{ max_upload_size_mb }} MB. Executable and script files are blocked.</div>
+      <button class="btn btn-primary mt-3" type="submit">Encrypt and store</button>
+      <div id="library-upload-status" class="small mt-3" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</div>
+<div class="card ss-card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr><th>Document</th><th>Size</th><th>Stored</th><th></th></tr></thead>
+      <tbody>
+        {% for document in documents %}
+          <tr>
+            <td>{{ document.original_name }}</td>
+            <td>{{ document.file_size|filesizeformat }}</td>
+            <td>{{ document.created_at }}</td>
+            <td class="text-end text-nowrap">
+              <a class="btn btn-sm btn-primary" href="{% url 'library_share' document.pk %}">Share</a>
+              <form method="post" action="{% url 'library_delete' document.pk %}" class="d-inline" onsubmit="return confirm('Permanently delete this library document?');">
+                {% csrf_token %}
+                <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="4" class="text-center text-muted py-5">Your library is empty. Store a document above to reuse it later.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<script src="{% static 'shares/library-upload.js' %}" defer></script>
+{% endblock %}
