@@ -285,12 +285,38 @@ class ShareOptionsTests(TestCase):
     def test_sensitive_text_is_masked_on_preview(self):
         """Replace common sensitive values in text previews."""
         masked = mask_text(
-            'Email test@example.com phone 9876543210 Aadhaar 123412341234 PAN ABCDE1234F'
+            'Email test@example.com phone 987 654-3210 '
+            'Aadhaar 1234 1234 1234 PAN ABCDE1234F'
         )
         self.assertNotIn('test@example.com', masked)
-        self.assertNotIn('9876543210', masked)
-        self.assertNotIn('123412341234', masked)
+        self.assertNotIn('987 654-3210', masked)
+        self.assertNotIn('1234 1234 1234', masked)
         self.assertNotIn('ABCDE1234F', masked)
+
+    def test_vercel_explains_when_masked_pdf_preview_is_unavailable(self):
+        """Do not offer an unmasked Vercel PDF preview when masking was requested."""
+        shared_file = self.upload(
+            file=SimpleUploadedFile('invoice.pdf', b'%PDF-1.4\n%%EOF'),
+            mask_sensitive='on',
+            download_allowed='on',
+        )
+        environment = {
+            'DJANGO_SECRET_KEY': 'test-secret',
+            'DATABASE_URL': 'postgresql://test:test@localhost/test',
+            'S3_BUCKET_NAME': 'test-bucket',
+            'S3_REGION': 'test-region',
+            'S3_ENDPOINT_URL': 'https://storage.example.test',
+            'S3_ACCESS_KEY_ID': 'test-access-key',
+            'S3_SECRET_ACCESS_KEY': 'test-secret-key',
+        }
+        with patch.dict(os.environ, environment):
+            with override_settings(VERCEL=True, USE_OBJECT_STORAGE=True):
+                response = self.client.get(f'/f/{shared_file.token}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'masked image and PDF previews are unavailable')
+        self.assertNotContains(response, 'View in browser')
+        self.assertContains(response, 'Download file')
 
     def test_ocr_masking_fails_closed_without_tesseract(self):
         """Do not return an image unchanged if OCR masking cannot run."""

@@ -150,7 +150,7 @@ SENSITIVE_PATTERNS = (
     re.compile(r'\b[A-Z]{2}\d{2}[A-Z0-9]{11,12}\b', re.I),
     re.compile(r'\b(?:\+91[\s-]?)?[6-9]\d{9}\b'),
     re.compile(r'\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b', re.I),
-    re.compile(r'\b\d{9,18}\b'),
+    re.compile(r'(?<!\d)(?:\d[\s-]?){8,17}\d(?!\d)'),
 )
 
 SENSITIVE_LABELS = re.compile(
@@ -364,7 +364,14 @@ def download(request, token):
         return unavailable(request)
 
     action = request.POST.get('action') if request.method == 'POST' else None
-    can_preview = preview_content_type(shared_file.original_name) is not None
+    content_type = preview_content_type(shared_file.original_name)
+    masking_unavailable = (
+        settings.USE_OBJECT_STORAGE
+        and shared_file.mask_sensitive
+        and content_type is not None
+        and not content_type.startswith('text/')
+    )
+    can_preview = content_type is not None and not masking_unavailable
     if request.method == 'POST' and action == 'download' and not shared_file.download_allowed:
         log_access(shared_file, request, False, 'download denied by uploader')
         messages.error(request, "The uploader has disabled downloads for this share.")
@@ -555,6 +562,7 @@ window.addEventListener('focus', resumePreview);
         'form': form,
         'can_preview': can_preview,
         'client_encrypted_download': settings.USE_OBJECT_STORAGE,
+        'masking_unavailable': masking_unavailable,
     })
 
 

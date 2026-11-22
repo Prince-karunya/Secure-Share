@@ -52,7 +52,14 @@
               {{ form.mask_sensitive }}
               <label class="form-check-label fw-semibold" for="{{ form.mask_sensitive.id_for_label }}">Mask sensitive information in previews</label>
             </div>
-            <div class="form-text">Masks detected phone numbers, emails, Aadhaar/card numbers, PANs, and account numbers. OCR should be treated as assisted masking, not a guarantee.</div>
+            <div class="form-text">
+              Masks detected phone numbers, emails, Aadhaar/card numbers, PANs, and account numbers.
+              {% if client_encrypted_upload %}
+                On Vercel, masking is supported only for text-file previews; masked image and PDF previews are unavailable.
+              {% else %}
+                Image and PDF masking requires Tesseract OCR and should be treated as assisted masking, not a guarantee.
+              {% endif %}
+            </div>
           </div>
           <div class="mb-3">
             <div class="form-check">

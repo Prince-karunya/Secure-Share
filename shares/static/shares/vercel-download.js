@@ -35,7 +35,7 @@
       /\b[A-Z]{2}\d{2}[A-Z0-9]{11,12}\b/gi,
       /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/g,
       /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-      /\b\d{9,18}\b/g
+      /(?<!\d)(?:\d[\s-]?){8,17}\d(?!\d)/g
     ];
     return patterns.reduce((value, pattern) =>
       value.replace(pattern, match => '•'.repeat(match.length)), text);

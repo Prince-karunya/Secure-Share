@@ -17,6 +17,11 @@
             <dt class="col-4">Downloads</dt><dd class="col-8">Disabled by uploader</dd>
           {% endif %}
         </dl>
+        {% if masking_unavailable %}
+          <div class="alert alert-warning">
+            Sensitive masking is enabled, but masked image and PDF previews are unavailable on this deployment. The file is not shown unmasked.
+          </div>
+        {% endif %}
         <form method="post" id="share-access-form"
               data-client-encrypted="{{ client_encrypted_download|yesno:'true,false' }}"
               data-access-url="{% url 'object_access' shared_file.token %}">
