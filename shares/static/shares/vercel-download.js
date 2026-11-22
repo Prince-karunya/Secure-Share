@@ -42,6 +42,24 @@
       value.replace(pattern, match => '•'.repeat(match.length)), text);
   }
 
+  function hasSensitiveOcrText(text) {
+    const normalized = text.normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '');
+    if (maskText(normalized) !== normalized) return true;
+
+    const compact = normalized.replace(/\s+/g, '');
+    if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(compact)) return true;
+    if (/\b(?:gmail|outlook|hotmail|yahoo|icloud)\.(?:com|in|net|org)\b/i.test(compact)) return true;
+    if (/\b(?:aadhaar|aadhar|pan|gstin|ifsc|account|phone|mobile|e-?mail|address)\b/i.test(normalized)) {
+      return true;
+    }
+
+    const numberCandidates = normalized.match(/(?:[0-9OIl|][\s().:/+-]*){8,20}/g) || [];
+    return numberCandidates.some(candidate => {
+      const digits = candidate.replace(/[Oo]/g, '0').replace(/[Il|]/g, '1').replace(/\D/g, '');
+      return digits.length >= 8 && digits.length <= 18;
+    });
+  }
+
   async function getOcrWorker() {
     if (!window.Tesseract) {
       await new Promise((resolve, reject) => {
@@ -59,6 +77,9 @@
             status.textContent = `Scanning for sensitive text… ${Math.round(message.progress * 100)}%`;
           }
         }
+      }).then(async worker => {
+        await worker.setParameters({ tessedit_pageseg_mode: '11' });
+        return worker;
       });
     }
     return ocrWorkerPromise;
@@ -70,11 +91,15 @@
     const { data } = await worker.recognize(canvas);
     const context = canvas.getContext('2d');
     let redactedLines = 0;
-    for (const line of data.lines || []) {
-      const hasPatternMatch = maskText(line.text) !== line.text;
-      const hasLabeledValue = /\b(?:aadhaar|aadhar|pan|gstin|ifsc|account|phone|mobile|email|address)\b/i.test(line.text)
-        && /[:#-]\s*\S/.test(line.text);
-      if (!hasPatternMatch && !hasLabeledValue) continue;
+    let hasLineBoxes = false;
+    const lines = data.lines && data.lines.length
+      ? data.lines
+      : (data.blocks || []).flatMap(block =>
+        (block.paragraphs || []).flatMap(paragraph => paragraph.lines || []));
+    for (const line of lines) {
+      const text = line.text || (line.words || []).map(word => word.text).join(' ');
+      if (!line.bbox || !hasSensitiveOcrText(text)) continue;
+      hasLineBoxes = true;
 
       const padding = Math.max(3, Math.round((line.bbox.y1 - line.bbox.y0) * 0.15));
       const left = Math.max(0, line.bbox.x0 - padding);
@@ -83,6 +108,32 @@
       const bottom = Math.min(canvas.height, line.bbox.y1 + padding);
       context.fillStyle = '#111827';
       context.fillRect(left, top, right - left, bottom - top);
+      redactedLines += 1;
+    }
+    if (!lines.length && data.words && data.words.length) {
+      const wordRows = new Map();
+      for (const word of data.words) {
+        if (!word.bbox) continue;
+        const row = Math.round((word.bbox.y0 + word.bbox.y1) / 2 / 10);
+        const words = wordRows.get(row) || [];
+        words.push(word);
+        wordRows.set(row, words);
+      }
+      for (const words of wordRows.values()) {
+        const text = words.map(word => word.text).join(' ');
+        if (!hasSensitiveOcrText(text)) continue;
+        const left = Math.max(0, Math.min(...words.map(word => word.bbox.x0)) - 3);
+        const top = Math.max(0, Math.min(...words.map(word => word.bbox.y0)) - 3);
+        const right = Math.min(canvas.width, Math.max(...words.map(word => word.bbox.x1)) + 3);
+        const bottom = Math.min(canvas.height, Math.max(...words.map(word => word.bbox.y1)) + 3);
+        context.fillStyle = '#111827';
+        context.fillRect(left, top, right - left, bottom - top);
+        redactedLines += 1;
+      }
+    }
+    if (!hasLineBoxes && hasSensitiveOcrText(data.text || '')) {
+      context.fillStyle = '#111827';
+      context.fillRect(0, 0, canvas.width, canvas.height);
       redactedLines += 1;
     }
     return redactedLines;
@@ -105,9 +156,9 @@
     let redactedLines = 0;
     for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 50); pageNumber++) {
       const page = await pdf.getPage(pageNumber);
-      const initialViewport = page.getViewport({ scale: 1.3 });
-      const scale = Math.min(1, 2400 / Math.max(initialViewport.width, initialViewport.height));
-      const viewport = page.getViewport({ scale: 1.3 * scale });
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(3, 1800 / baseViewport.width, 2400 / baseViewport.height);
+      const viewport = page.getViewport({ scale });
       const canvas = document.createElement('canvas');
       canvas.className = 'img-fluid d-block mb-3 mx-auto';
       canvas.setAttribute('role', 'img');
@@ -116,6 +167,14 @@
       canvas.height = viewport.height;
       await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
       if (maskSensitive) redactedLines += await redactCanvas(canvas);
+      const displayScale = Math.min(1, 1200 / Math.max(canvas.width, canvas.height));
+      if (displayScale < 1) {
+        const preview = await createImageBitmap(canvas);
+        canvas.width = Math.max(1, Math.round(preview.width * displayScale));
+        canvas.height = Math.max(1, Math.round(preview.height * displayScale));
+        canvas.getContext('2d').drawImage(preview, 0, 0, canvas.width, canvas.height);
+        preview.close();
+      }
       result.appendChild(canvas);
     }
     return redactedLines;
@@ -150,10 +209,13 @@
       result.appendChild(pre);
     } else if (info.content_type === 'application/pdf') {
       redactedLines = await showPdf(plaintext, info.mask_sensitive);
+      if (info.mask_sensitive && !redactedLines) {
+        throw new Error('No sensitive text was detected, so the preview is hidden to avoid showing unmasked content.');
+      }
     } else {
       if (info.mask_sensitive) {
         const bitmap = await createImageBitmap(blob);
-        const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
+        const scale = Math.min(2.5, 3000 / Math.max(bitmap.width, bitmap.height));
         const canvas = document.createElement('canvas');
         canvas.className = 'img-fluid';
         canvas.setAttribute('role', 'img');
@@ -163,6 +225,9 @@
         canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
         bitmap.close();
         redactedLines = await redactCanvas(canvas);
+        if (!redactedLines) {
+          throw new Error('No sensitive text was detected, so the preview is hidden to avoid showing unmasked content.');
+        }
         result.appendChild(canvas);
       } else {
         const image = document.createElement('img');
@@ -217,6 +282,7 @@
         });
       }
     } catch (error) {
+      result.replaceChildren();
       status.textContent = error.message || 'The file could not be decrypted.';
     }
   });
