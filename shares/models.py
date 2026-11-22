@@ -30,18 +30,32 @@ class SharedFile(models.Model):
     failed_attempts = models.PositiveIntegerField(default=0)
     is_deleted = models.BooleanField(default=False)
     storage_delete_after = models.DateTimeField(null=True, blank=True)
+    source_document = models.ForeignKey(
+        'LibraryDocument',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='shared_links',
+    )
 
     def is_expired(self):
         """Return whether this share's expiry time has passed."""
         return self.expires_at is not None and timezone.now() >= self.expires_at
 
     def downloads_left(self):
-        """Return the number of downloads still available."""
+        """Return remaining downloads, or None when downloads are unlimited."""
+        if self.max_downloads == 0:
+            return None
         return max(0, self.max_downloads - self.download_count)
 
     def is_available(self):
         """Return whether the share can still be downloaded."""
-        return not self.is_deleted and not self.is_expired() and self.downloads_left() > 0
+        downloads_left = self.downloads_left()
+        return (
+            not self.is_deleted
+            and not self.is_expired()
+            and (downloads_left is None or downloads_left > 0)
+        )
 
     def __str__(self):
         """Return a readable name for the admin and shell."""

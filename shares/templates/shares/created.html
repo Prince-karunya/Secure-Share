@@ -26,7 +26,7 @@
           <dt class="col-5">File</dt><dd class="col-7">{{ shared_file.original_name }}</dd>
           <dt class="col-5">Expires</dt><dd class="col-7">{% if shared_file.expires_at %}{{ shared_file.expires_at }}{% else %}No expiry{% endif %}</dd>
           {% if shared_file.download_allowed %}
-            <dt class="col-5">{% if client_encrypted_share %}Download access limit{% else %}Download limit{% endif %}</dt><dd class="col-7">{{ shared_file.max_downloads }}</dd>
+            <dt class="col-5">{% if client_encrypted_share %}Download access limit{% else %}Download limit{% endif %}</dt><dd class="col-7">{% if shared_file.max_downloads == 0 %}Unlimited{% else %}{{ shared_file.max_downloads }}{% endif %}</dd>
           {% else %}
             <dt class="col-5">Downloads</dt><dd class="col-7">Disabled</dd>
           {% endif %}

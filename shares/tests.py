@@ -60,6 +60,35 @@ class ShareOptionsTests(TestCase):
         self.assertTrue(shared_file.is_deleted)
         self.assertFalse(Path(self.temp_dir.name, shared_file.stored_name).exists())
 
+    def test_no_expiry_unlimited_share_survives_views_and_repeated_downloads(self):
+        """Keep an unlimited no-expiry link available after previews and reloads."""
+        shared_file = self.upload(expiry_enabled='', max_downloads='0')
+        self.assertIsNone(shared_file.expires_at)
+        self.assertIsNone(shared_file.downloads_left())
+
+        for _ in range(2):
+            response = self.client.post(
+                f'/f/{shared_file.token}/',
+                {'action': 'view'},
+            )
+            self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(self.client.get(f'/f/{shared_file.token}/').status_code, 200)
+        self.assertEqual(self.client.get(f'/created/{shared_file.token}/').status_code, 200)
+
+        for _ in range(2):
+            response = self.client.post(
+                f'/f/{shared_file.token}/',
+                {'action': 'download'},
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(b''.join(response.streaming_content), b'private contents')
+
+        shared_file.refresh_from_db()
+        self.assertEqual(shared_file.download_count, 2)
+        self.assertTrue(shared_file.is_available())
+        self.assertFalse(shared_file.is_deleted)
+
     def test_password_option_is_required_when_enabled(self):
         """Reject enabled password protection without a sufficiently long password."""
         response = self.client.post('/', {
@@ -247,6 +276,36 @@ class ShareOptionsTests(TestCase):
             self.assertEqual(shared_file.download_count, 1)
             self.assertTrue(shared_file.is_deleted)
             self.assertIsNotNone(shared_file.storage_delete_after)
+
+    def test_object_storage_unlimited_downloads_do_not_expire_the_share(self):
+        """Permit repeated object-storage downloads when the share is unlimited."""
+        shared_file = self.upload(expiry_enabled='', max_downloads='0')
+        environment = {
+            'DJANGO_SECRET_KEY': 'test-secret',
+            'DATABASE_URL': 'postgresql://test:test@localhost/test',
+            'S3_BUCKET_NAME': 'test-bucket',
+            'S3_REGION': 'test-region',
+            'S3_ENDPOINT_URL': 'https://storage.example.test',
+            'S3_ACCESS_KEY_ID': 'test-access-key',
+            'S3_SECRET_ACCESS_KEY': 'test-secret-key',
+        }
+        with patch.dict(os.environ, environment):
+            with override_settings(VERCEL=True, USE_OBJECT_STORAGE=True):
+                with patch(
+                    'shares.views.object_storage.create_download_url',
+                    return_value='https://storage.example.test/signed-file',
+                ):
+                    for _ in range(2):
+                        response = self.client.post(
+                            f'/api/shares/{shared_file.token}/access/',
+                            {'action': 'download', 'password': ''},
+                        )
+                        self.assertEqual(response.status_code, 200, response.content)
+
+        shared_file.refresh_from_db()
+        self.assertEqual(shared_file.download_count, 2)
+        self.assertTrue(shared_file.is_available())
+        self.assertFalse(shared_file.is_deleted)
 
     def test_new_share_disables_downloads_by_default(self):
         """Create a share with the unchecked permission option and verify it is enforced."""
@@ -576,6 +635,7 @@ class DocumentLibraryTests(TestCase):
         )
         self.client.force_login(other_user)
         self.assertEqual(self.client.get('/library/').status_code, 200)
+        self.assertContains(self.client.get('/library/'), 'My documents')
         self.assertNotContains(self.client.get('/library/'), document.original_name)
         self.assertEqual(self.client.get(f'/library/{document.pk}/ciphertext/').status_code, 404)
         self.assertEqual(self.client.get(f'/library/{document.pk}/share/').status_code, 410)
@@ -628,6 +688,7 @@ class DocumentLibraryTests(TestCase):
 
         shared_file = SharedFile.objects.get(token=share_info['token'])
         self.assertFalse(shared_file.is_deleted)
+        self.assertEqual(shared_file.source_document, document)
         self.assertEqual(
             (Path(self.temp_dir.name) / shared_file.stored_name).read_bytes(),
             share_ciphertext,
@@ -640,6 +701,11 @@ class DocumentLibraryTests(TestCase):
             ),
             content,
         )
+        shared_file.is_deleted = True
+        shared_file.save(update_fields=['is_deleted'])
+        history = self.client.get('/dashboard/')
+        self.assertContains(history, 'Reshare')
+        self.assertContains(history, f'/library/{document.pk}/share/')
         self.assertTrue(LibraryDocument.objects.filter(pk=document.pk, is_ready=True).exists())
         self.assertEqual(
             AESGCM(library_key).decrypt(

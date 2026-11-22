@@ -4,9 +4,10 @@ A small Django application that AES-256-GCM encrypts uploaded files and removes 
 
 Uploads are limited to 100 MB per file.
 
-Expiry and password protection can each be turned off on the upload form. Shares
-without an expiry stay available until their download limit is reached or the
-uploader deletes them. Shares without a password are still encrypted at rest;
+Expiry and password protection can each be turned off on the upload form. Download
+limits are independent of expiry; choose **Unlimited** to keep a share available
+until its expiry time or until the uploader deletes it. Views do not consume
+download grants. Shares without a password are still encrypted at rest;
 their encryption key is derived from Django's `SECRET_KEY` and the share token.
 Set a private `DJANGO_SECRET_KEY` for real use and keep it stable; passwordless
 shares cannot be decrypted if it changes. The built-in key is for local
@@ -24,12 +25,13 @@ Users can register or log in with either their email address or username and
 password. New shares and their download history are tied to the signed-in
 account and appear in `/dashboard/`.
 
-The signed-in **Document library** stores reusable files encrypted in the
+The signed-in **My documents** area stores reusable files encrypted in the
 browser. Only the owning account can access the library. Choose **Share** on a
 stored document to select its expiry, recipient password, download permission
 and limit, and preview masking before creating a link. Sharing creates a
 separate encrypted copy; deleting or expiring that link does not remove the
-library document. Library files remain until you delete them. Keep
+library document. Share history offers **Reshare** for links created from a
+stored document. Library files remain until you delete them. Keep
 `DJANGO_SECRET_KEY` unchanged and backed up so stored library files remain
 decryptable.
 
@@ -39,8 +41,8 @@ Tesseract.js to find and cover sensitive OCR text in image/PDF previews;
 text-file previews use pattern matching. Vercel loads the pinned OCR library
 and English language model from jsDelivr on demand, so masking those files
 requires an internet connection. File contents are processed in the browser,
-not sent to an OCR service. Masking changes previews only, not the original
-download. OCR and pattern detection can miss sensitive content; carefully
+not sent to an OCR service. Masked downloads are also transformed in the
+browser. OCR and pattern detection can miss sensitive content; carefully
 review the preview and do not treat masking as a legal-compliance guarantee.
 
 Protected preview mode also disables common browser actions and hides content

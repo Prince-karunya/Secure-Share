@@ -6,7 +6,7 @@
   <div class="col-xl-8 col-lg-9">
     <div class="card ss-card">
       <div class="card-body p-4 p-md-5">
-        <a class="small" href="{% url 'library' %}">&larr; Back to document library</a>
+        <a class="small" href="{% url 'library' %}">&larr; Back to My documents</a>
         <h1 class="h2 page-heading mt-3 mb-2">Share a library document</h1>
         <p class="text-muted mb-4"><strong>{{ document.original_name }}</strong> · {{ document.file_size|filesizeformat }}</p>
         <p class="alert alert-info">Choose the link options below. A separate encrypted copy will be created; your library document will not be changed or deleted.</p>
@@ -32,6 +32,7 @@
           <div id="download-limit-options" class="mb-3" hidden>
             <label class="form-label fw-semibold" for="{{ form.max_downloads.id_for_label }}">Maximum downloads</label>
             {{ form.max_downloads }}
+            <div class="form-text">Choose Unlimited to keep this link available until it expires or you delete it.</div>
           </div>
           <div class="mb-3">
             <div class="form-check">

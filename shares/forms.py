@@ -53,7 +53,8 @@ class UploadForm(forms.Form):
         ('1440', '24 hours'),
         ('10080', '7 days'),
     ])
-    max_downloads = forms.ChoiceField(required=False, choices=[
+    max_downloads = forms.ChoiceField(required=False, initial='0', choices=[
+        ('0', 'Unlimited'),
         ('1', '1'),
         ('3', '3'),
         ('5', '5'),

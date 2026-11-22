@@ -112,7 +112,7 @@ def cleanup_expired_shares():
 
         due_shares = SharedFile.objects.filter(is_deleted=False).filter(
             Q(expires_at__lte=timezone.now()) |
-            Q(download_count__gte=F('max_downloads'))
+            Q(max_downloads__gt=0, download_count__gte=F('max_downloads'))
         ).order_by('expires_at', 'created_at')[:20]
         for shared_file in due_shares:
             delete_shared_file(shared_file, defer_object_delete=True)
@@ -325,7 +325,9 @@ def mask_download_content(plaintext, filename):
 @login_required
 def dashboard(request):
     """Show the signed-in user's upload history and share status."""
-    shares = SharedFile.objects.filter(owner=request.user).order_by('-created_at')
+    shares = SharedFile.objects.filter(owner=request.user).select_related(
+        'source_document',
+    ).order_by('-created_at')
     return render(request, 'shares/dashboard.html', {
         'shares': shares,
         'client_encrypted_download': settings.USE_OBJECT_STORAGE,
@@ -586,6 +588,7 @@ def library_share_init(request, document_id):
         mask_sensitive=form.cleaned_data['mask_sensitive'],
         max_downloads=int(form.cleaned_data['max_downloads'] or 1),
         owner=request.user,
+        source_document=document,
         is_deleted=True,
         storage_delete_after=timezone.now() + timezone.timedelta(minutes=15),
     )
@@ -889,7 +892,10 @@ def download(request, token):
                     shared_file.download_count += 1
                     shared_file.save(update_fields=['download_count'])
                     log_access(shared_file, request, True, 'downloaded')
-                    if shared_file.download_count >= shared_file.max_downloads:
+                    if (
+                        shared_file.max_downloads > 0
+                        and shared_file.download_count >= shared_file.max_downloads
+                    ):
                         delete_shared_file(shared_file)
                 else:
                     log_access(shared_file, request, True, 'viewed')
@@ -1188,8 +1194,9 @@ def object_access(request, token):
         updated = SharedFile.objects.filter(
             pk=shared_file.pk,
             is_deleted=False,
-            download_count__lt=F('max_downloads'),
             failed_attempts__lt=5,
+        ).filter(
+            Q(max_downloads=0) | Q(download_count__lt=F('max_downloads'))
         ).update(download_count=F('download_count') + 1)
         if not updated:
             log_access(shared_file, request, False, 'download limit reached')

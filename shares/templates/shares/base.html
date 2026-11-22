@@ -23,7 +23,7 @@
       </a>
       <div class="nav-actions">
         {% if user.is_authenticated %}
-          <a class="nav-link-modern" href="{% url 'library' %}">Document library</a>
+          <a class="nav-link-modern" href="{% url 'library' %}">My documents</a>
           <a class="nav-link-modern" href="{% url 'dashboard' %}">Share history</a>
           <form method="post" action="{% url 'account_logout' %}" class="m-0">
             {% csrf_token %}

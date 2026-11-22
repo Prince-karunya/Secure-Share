@@ -46,6 +46,7 @@
             <label class="form-label fw-semibold" for="{{ form.max_downloads.id_for_label }}">Maximum downloads</label>
             {{ form.max_downloads }}
             {% if form.max_downloads.errors %}<div class="text-danger small">{{ form.max_downloads.errors|striptags }}</div>{% endif %}
+            <div class="form-text">Choose Unlimited to keep this link available until it expires or you delete it.</div>
           </div>
           <div class="mb-3">
             <div class="form-check">

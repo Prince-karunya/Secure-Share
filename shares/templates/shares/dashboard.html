@@ -1,13 +1,14 @@
 {% extends "shares/base.html" %}
-{% block title %}My documents - SecureShare{% endblock %}
+{% block title %}Share history - SecureShare{% endblock %}
 {% block content %}
 <div class="d-flex align-items-end justify-content-between mb-4">
   <div>
     <p class="text-uppercase text-muted fw-bold small mb-2">Workspace</p>
     <h1 class="h2 page-heading mb-0">Share history</h1>
+    <p class="text-muted mt-2 mb-0">Store files in My documents to keep them for resharing after a link expires.</p>
   </div>
   <div class="d-flex gap-2">
-    <a class="btn btn-outline-primary" href="{% url 'library' %}">Document library</a>
+    <a class="btn btn-outline-primary" href="{% url 'library' %}">My documents</a>
     <a class="btn btn-primary" href="{% url 'upload' %}">+ Create share</a>
   </div>
 </div>
@@ -21,13 +22,16 @@
             <td>{{ share.original_name }}</td>
             <td>{{ share.created_at }}</td>
             <td>{% if share.expires_at %}{{ share.expires_at }}{% else %}No expiry{% endif %}</td>
-            <td>{% if share.download_allowed %}{{ share.download_count }} / {{ share.max_downloads }}{% else %}Disabled{% endif %}</td>
+            <td>{% if share.download_allowed %}{{ share.download_count }} / {% if share.max_downloads == 0 %}Unlimited{% else %}{{ share.max_downloads }}{% endif %}{% else %}Disabled{% endif %}</td>
             <td>{% if share.mask_sensitive %}<span class="badge text-bg-info">Enabled</span>{% else %}Off{% endif %}</td>
             <td>{% if share.is_deleted %}<span class="badge text-bg-secondary">Deleted</span>{% elif share.is_available %}<span class="badge text-bg-success">Available</span>{% else %}<span class="badge text-bg-warning">Expired</span>{% endif %}</td>
             <td class="text-end">
               {% if share.is_available %}
                 <a class="btn btn-sm btn-outline-primary" data-share-token="{{ share.token }}"
                    href="{% if client_encrypted_download %}{% url 'download' share.token %}{% else %}{% url 'created' share.token %}{% endif %}">Open link</a>
+              {% endif %}
+              {% if share.source_document and share.source_document.is_ready %}
+                <a class="btn btn-sm btn-outline-primary" href="{% url 'library_share' share.source_document_id %}">Reshare</a>
               {% endif %}
               {% if not share.is_deleted %}
                 <form method="post" action="{% url 'delete_now' share.token %}" class="d-inline" onsubmit="return confirm('Delete this document now?');">
@@ -38,7 +42,7 @@
             </td>
           </tr>
         {% empty %}
-          <tr><td colspan="7" class="text-center text-muted py-5">No documents have been uploaded yet.</td></tr>
+          <tr><td colspan="7" class="text-center text-muted py-5">No shares yet. Store reusable files in My documents.</td></tr>
         {% endfor %}
       </tbody>
     </table>

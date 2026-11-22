@@ -12,7 +12,7 @@
           <dt class="col-4">Size</dt><dd class="col-8">{{ shared_file.file_size }} bytes</dd>
           <dt class="col-4">Expires</dt><dd class="col-8">{% if shared_file.expires_at %}{{ shared_file.expires_at }}{% else %}No expiry{% endif %}</dd>
           {% if shared_file.download_allowed %}
-            <dt class="col-4">{% if client_encrypted_download %}Download grants left{% else %}Downloads left{% endif %}</dt><dd class="col-8">{{ shared_file.downloads_left }}</dd>
+            <dt class="col-4">{% if client_encrypted_download %}Download grants left{% else %}Downloads left{% endif %}</dt><dd class="col-8">{% if shared_file.max_downloads == 0 %}Unlimited{% else %}{{ shared_file.downloads_left }}{% endif %}</dd>
           {% else %}
             <dt class="col-4">Downloads</dt><dd class="col-8">Disabled by uploader</dd>
           {% endif %}
