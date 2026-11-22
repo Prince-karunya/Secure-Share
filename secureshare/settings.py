@@ -13,7 +13,6 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 from pathlib import Path
 import os
 import dj_database_url
-from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -23,15 +22,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 VERCEL = bool(os.environ.get('VERCEL'))
-if VERCEL and not os.environ.get('DJANGO_SECRET_KEY'):
-    raise ImproperlyConfigured('DJANGO_SECRET_KEY must be configured on Vercel.')
-if VERCEL and not os.environ.get('DATABASE_URL'):
-    raise ImproperlyConfigured('DATABASE_URL must be configured on Vercel.')
-if VERCEL and not os.environ.get('S3_BUCKET_NAME'):
-    raise ImproperlyConfigured('S3_BUCKET_NAME must be configured on Vercel.')
-if VERCEL and not all(os.environ.get(key) for key in ('S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY')):
-    raise ImproperlyConfigured('S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be configured on Vercel.')
-
 SECRET_KEY = os.environ.get(
     'DJANGO_SECRET_KEY',
     'django-insecure-$sq51kp-0rinhrc=s!%n_)x!mcfqf7m&y_b&6)0_n*pb=xaksf',
@@ -61,6 +51,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'secureshare.middleware.DeploymentConfigurationMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',

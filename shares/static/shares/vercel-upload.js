@@ -7,6 +7,7 @@
   const progressBar = form.querySelector('.progress-bar');
   const fileInput = form.querySelector('input[type="file"]');
   const submitButton = form.querySelector('button[type="submit"]');
+  const maxFileSize = 50_000_000 - 16;
 
   function csrfToken() {
     return form.querySelector('input[name="csrfmiddlewaretoken"]').value;
@@ -84,8 +85,8 @@
       status.textContent = 'Choose a file first.';
       return;
     }
-    if (file.size < 1 || file.size > 100 * 1024 * 1024) {
-      status.textContent = 'Choose a file no larger than 100 MB.';
+    if (file.size < 1 || file.size > maxFileSize) {
+      status.textContent = 'Choose a file no larger than 50 MB on the free deployment.';
       return;
     }
 

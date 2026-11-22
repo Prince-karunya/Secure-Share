@@ -12,7 +12,10 @@ def _client():
         region_name=os.environ.get('S3_REGION', 'us-east-1'),
         aws_access_key_id=os.environ.get('S3_ACCESS_KEY_ID'),
         aws_secret_access_key=os.environ.get('S3_SECRET_ACCESS_KEY'),
-        config=Config(signature_version='s3v4'),
+        config=Config(
+            signature_version='s3v4',
+            s3={'addressing_style': 'path'},
+        ),
     )
 
 

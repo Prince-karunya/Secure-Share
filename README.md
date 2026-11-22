@@ -131,57 +131,51 @@ Encrypted files are stored in `encrypted_files/` outside static and media URLs.
 ## Deploying on Vercel
 
 Vercel functions do not provide durable local disk or a persistent SQLite
-database. This deployment configuration uses PostgreSQL for application
-records and a private S3-compatible bucket (for example Cloudflare R2 or AWS
-S3) for ciphertext. Uploads are encrypted in the browser and sent directly to
-the bucket, so a 100 MB file does not pass through the serverless function
-request-size limit. Downloads are fetched and decrypted in the recipient's
-browser.
+database. For a student project on free tiers, use Supabase for both PostgreSQL
+records and a private Storage bucket. Uploads are encrypted in the browser and
+sent directly to the bucket; the Supabase Free plan currently limits individual
+uploads to 50 MB. Downloads are fetched and decrypted in the recipient's browser.
 
 ### 1. Create external storage
 
-Create a PostgreSQL database (Neon is one option) and a **private** S3-compatible
-bucket. Configure bucket CORS to allow `PUT` and `GET` from your deployed
-`https://<project>.vercel.app` origin, with the `Content-Type` request header.
-Add your Vercel preview origin too if you test Preview deployments. Never make
-the bucket public. Configure a lifecycle rule to delete objects under the
-`pending/` prefix after one day; these are abandoned, incomplete browser
-uploads. For Cloudflare R2, create an access key limited
-to this bucket and use the account's S3 API endpoint. AWS S3 credentials can
-be used without `S3_ENDPOINT_URL`.
+Create a Supabase Free project and a **private** Storage bucket named
+`secure-share-files`. Keep the bucket private. In Storage settings, enable the
+S3 protocol and create S3 access keys for server-side use. Supabase S3
+credentials are server-side secrets; never expose them in browser code.
+Supabase's S3 endpoint, region, access key, and secret are displayed in the
+project's Storage S3 configuration page.
 
-An S3 CORS rule should be equivalent to:
-
-```json
-[
-  {
-    "AllowedOrigins": ["https://<project>.vercel.app"],
-    "AllowedMethods": ["GET", "PUT"],
-    "AllowedHeaders": ["Content-Type"],
-    "MaxAgeSeconds": 3000
-  }
-]
-```
+The browser uploads directly to signed URLs from Supabase's S3 endpoint. Check
+that the endpoint accepts browser requests from your Vercel production origin;
+if testing Preview deployments, check their origins too.
 
 ### 2. Configure Vercel
 
 Import this folder as a Vercel project. Add the environment variables from
 `.env.example` in Vercel Project Settings for Production and Preview. Set
-`DJANGO_SECRET_KEY` to a new random value and configure `DATABASE_URL`, the
-private bucket name, region/endpoint, and bucket-scoped credentials.
+`DJANGO_SECRET_KEY` to a new random value. Copy the Postgres connection string
+from Supabase's Connect dialog into `DATABASE_URL`; use its session pooler
+connection for serverless deployments. Configure the private bucket name and
+the S3 endpoint, region, access key, and secret from Supabase's Storage S3
+settings.
 `VERCEL_URL` is supplied by Vercel. Set `DJANGO_ALLOWED_HOSTS`,
 `CSRF_TRUSTED_ORIGINS`, and `SHARE_BASE_URL` to your actual project domain.
 Set a random `CRON_SECRET` for scheduled cleanup. Never commit real credentials.
-For Cloudflare R2, set `S3_REGION=auto`; AWS S3 normally uses `S3_REGION=us-east-1`.
+Supabase Free currently includes 500 MB of database, 1 GB of file storage, and
+5 GB of egress; free projects may pause after one week of inactivity. Check
+Supabase's current pricing and limits before presenting, as plan terms can change.
 
 Vercel detects the Django `manage.py` and WSGI entry point, then collects and
 serves static assets through its CDN. The configured Vercel cron requests
 cleanup once a day so it is deployable on Vercel Hobby. Expired and used-up
 links are rejected and deleted as soon as someone opens them; the scheduled
 cleanup removes stale object data when no one returns to the share. Keep the
-bucket's `pending/` lifecycle rule enabled.
+app's cleanup cron configured.
 Vercel Hobby supports only daily cron execution. On Pro, change the schedule
 in `vercel.json` to `*/5 * * * *` for more frequent physical cleanup.
+The deployment can now be created before environment variables are entered;
+until all required values are configured, app requests show a setup-required
+503 response instead of failing Vercel's Django settings discovery.
 
 ### 3. Apply database migrations and deploy
 
@@ -215,7 +209,7 @@ For subsequent schema changes, run migrations against the same production
   this serverless direct-transfer design does not provide strict one-use
   downloads. Use a persistent server host if strict one-time enforcement is
   required.
-- A 100 MB encrypted file is briefly buffered in browser memory during
+- A 50 MB encrypted file is briefly buffered in browser memory during
   encryption/decryption. Test the presentation on a modern computer and phone
   with sufficient free memory.
 - The database and bucket are external services and may incur costs or have

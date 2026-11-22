@@ -23,7 +23,7 @@ import re
 
 from .crypto_utils import decrypt_bytes, encrypt_bytes
 from .file_types import PREVIEW_CONTENT_TYPES
-from .forms import DownloadForm, RegistrationForm, UploadForm
+from .forms import DownloadForm, RegistrationForm, UploadForm, VERCEL_UPLOAD_SIZE
 from .models import AccessLog, SharedFile
 from . import object_storage
 
@@ -255,6 +255,7 @@ def upload(request):
         return render(request, 'shares/upload.html', {
             'form': UploadForm(),
             'client_encrypted_upload': True,
+            'max_upload_size_mb': 50,
         })
 
     if request.method == 'POST':
@@ -572,6 +573,8 @@ def upload_init(request):
         return JsonResponse({'error': 'Choose a file before uploading.'}, status=400)
 
     file_name = form.cleaned_data['file_name']
+    if form.cleaned_data['file_size'] > VERCEL_UPLOAD_SIZE:
+        return JsonResponse({'error': 'The free deployment upload limit is 50 MB.'}, status=400)
     if Path(file_name.replace('\\', '/')).name != file_name:
         return JsonResponse({'error': 'Invalid file name.'}, status=400)
 

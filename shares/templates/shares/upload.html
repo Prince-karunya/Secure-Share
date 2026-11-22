@@ -73,7 +73,7 @@
             <div id="upload-status" class="small mt-2" role="status" aria-live="polite"></div>
           {% endif %}
         </form>
-        <p class="text-muted small mt-3 mb-0">Maximum 100 MB. Dangerous executable and script types are blocked.</p>
+        <p class="text-muted small mt-3 mb-0">Maximum {{ max_upload_size_mb|default:100 }} MB. Dangerous executable and script types are blocked.</p>
         {% if client_encrypted_upload %}
           <p class="text-muted small mt-2 mb-0">Your browser encrypts the file before it is sent directly to private storage. Use a modern browser and keep this tab open until the upload finishes.</p>
           <script src="{% static 'shares/vercel-upload.js' %}" defer></script>

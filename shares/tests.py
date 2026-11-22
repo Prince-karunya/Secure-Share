@@ -1,4 +1,5 @@
 import tempfile
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -73,6 +74,23 @@ class ShareOptionsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'This field is required.')
         self.assertEqual(SharedFile.objects.count(), 0)
+
+    def test_vercel_build_can_import_settings_without_runtime_secrets(self):
+        """Allow Vercel to discover Django settings while gating unconfigured requests."""
+        required = (
+            'DJANGO_SECRET_KEY',
+            'DATABASE_URL',
+            'S3_BUCKET_NAME',
+            'S3_REGION',
+            'S3_ENDPOINT_URL',
+            'S3_ACCESS_KEY_ID',
+            'S3_SECRET_ACCESS_KEY',
+        )
+        with patch.dict(os.environ, {key: '' for key in required}):
+            with override_settings(VERCEL=True):
+                response = self.client.get('/accounts/login/')
+        self.assertEqual(response.status_code, 503)
+        self.assertContains(response, 'configuration is incomplete', status_code=503)
 
     def test_qr_uses_configured_reachable_base_url(self):
         """Generate QR content for the configured share URL, not localhost."""

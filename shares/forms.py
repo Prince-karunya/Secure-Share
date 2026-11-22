@@ -9,6 +9,7 @@ from .file_types import PREVIEW_CONTENT_TYPES
 
 DANGEROUS_EXTENSIONS = {'.exe', '.bat', '.sh', '.js'}
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+VERCEL_UPLOAD_SIZE = 50_000_000 - 16
 
 
 class RegistrationForm(UserCreationForm):
